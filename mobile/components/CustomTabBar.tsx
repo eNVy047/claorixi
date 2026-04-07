@@ -1,45 +1,38 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Dimensions, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-
-const { width } = Dimensions.get('window');
 
 export default function CustomTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const router = useRouter();
 
   if (!state || !state.routes) return null;
 
-  // Check if current screen wants to hide the tab bar
   const focusedRoute = state.routes[state.index];
-  const focusedDescriptor = descriptors[focusedRoute.key];
-  const focusedOptions = focusedDescriptor?.options as any;
+  const focusedOptions = descriptors[focusedRoute.key]?.options as any;
+  if (focusedOptions?.tabBarStyle?.display === 'none') return null;
 
-  if (focusedOptions?.tabBarStyle?.display === 'none') {
-    return null;
-  }
+  const visibleRoutes = state.routes.filter((route, index) => {
+    const options: any = descriptors[route.key]?.options;
+    return !(
+      options?.href === null ||
+      route.name.includes('scan') ||
+      route.name === 'notification' ||
+      route.name === '_sitemap' ||
+      route.name === '+not-found'
+    );
+  });
 
   return (
     <View style={styles.container}>
-      {/* THE PILL */}
+      {/* PILL */}
       <View style={styles.pillContainer}>
-        {state.routes.map((route, index) => {
-          const descriptor = descriptors[route.key];
-          if (!descriptor) return null;
-
-          const options: any = descriptor.options;
-          
-          // Skip routes that should be hidden (like 'scan')
-          if (options?.href === null || 
-              route.name.includes('scan') || 
-              route.name === 'notification' ||
-              route.name === '_sitemap' ||
-              route.name === '+not-found'
-          ) return null;
-
-          const label = options.title !== undefined ? options.title : route.name;
-          const isFocused = state.index === index;
+        {visibleRoutes.map((route) => {
+          const originalIndex = state.routes.findIndex(r => r.key === route.key);
+          const isFocused = state.index === originalIndex;
+          const options: any = descriptors[route.key]?.options;
+          const label = options?.title ?? route.name;
 
           const onPress = () => {
             const event = navigation.emit({
@@ -47,53 +40,51 @@ export default function CustomTabBar({ state, descriptors, navigation }: BottomT
               target: route.key,
               canPreventDefault: true,
             });
-
             if (!isFocused && !event.defaultPrevented) {
               navigation.navigate(route.name);
             }
           };
 
-          // Map icons
           let iconName: any = 'home-outline';
-          if (route.name === '(dashboard)/index' || route.name === 'index') iconName = isFocused ? 'home' : 'home-outline';
-          if (route.name === '(dashboard)/progress' || route.name === 'progress') iconName = isFocused ? 'stats-chart' : 'stats-chart-outline';
-          if (route.name === 'notification') iconName = isFocused ? 'notifications' : 'notifications-outline';
-          if (route.name === '(dashboard)/profile' || route.name === 'profile') iconName = isFocused ? 'person' : 'person-outline';
+          const n = route.name;
+          if (n.includes('index') || n === 'index') iconName = isFocused ? 'home' : 'home-outline';
+          else if (n.includes('progress')) iconName = isFocused ? 'stats-chart' : 'stats-chart-outline';
+          else if (n.includes('profile')) iconName = isFocused ? 'person' : 'person-outline';
 
           if (isFocused) {
             return (
               <TouchableOpacity
-                key={route.name}
+                key={route.key}
                 onPress={onPress}
-                style={styles.activeTabPill}
+                style={styles.activeTab}
                 activeOpacity={0.8}
               >
-                <Ionicons name={iconName} size={20} color="#1a1a1a" />
-                <Text style={styles.activeTabText}>{label}</Text>
+                <Ionicons name={iconName} size={18} color="#1a1a1a" />
+                <Text style={styles.activeTabText} numberOfLines={1}>{label}</Text>
               </TouchableOpacity>
             );
           }
 
           return (
             <TouchableOpacity
-              key={route.name}
+              key={route.key}
               onPress={onPress}
               style={styles.inactiveTab}
               activeOpacity={0.7}
             >
-              <Ionicons name={iconName} size={24} color="#888" />
+              <Ionicons name={iconName} size={22} color="#888" />
             </TouchableOpacity>
           );
         })}
       </View>
 
-      {/* FLOATING ACTION BUTTON */}
-      <TouchableOpacity 
-        style={styles.fab} 
+      {/* FAB */}
+      <TouchableOpacity
+        style={styles.fab}
         onPress={() => router.push('/(tabs)/scan')}
         activeOpacity={0.9}
       >
-        <Ionicons name="add" size={32} color="#fff" />
+        <Ionicons name="add" size={30} color="#fff" />
       </TouchableOpacity>
     </View>
   );
@@ -102,73 +93,61 @@ export default function CustomTabBar({ state, descriptors, navigation }: BottomT
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
-    bottom: 30, // Elevated from bottom
-    width: '100%',
-    paddingHorizontal: 20,
+    bottom: 28,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between', // Push pill left and FAB right
   },
   pillContainer: {
+    flex: 1,
     flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: '#1a1a1a',
     borderRadius: 40,
-    padding: 6,
-    alignItems: 'center',
-    flex: 1, // Take up remaining space
-    marginRight: 15,
-    // Shadow for pill
+    padding: 5,
+    marginRight: 12,
+    minWidth: 0,           // ← critical: allows flex children to shrink
     ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 10 },
-        shadowOpacity: 0.3,
-        shadowRadius: 15,
-      },
-      android: {
-        elevation: 8,
-      },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.25, shadowRadius: 12 },
+      android: { elevation: 8 },
     }),
   },
-  activeTabPill: {
+  activeTab: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fff',
     borderRadius: 30,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    marginRight: 4,
+    paddingVertical: 9,
+    paddingHorizontal: 14,
+    gap: 7,
+    flexShrink: 0,         // ← never compress the label
+    flexGrow: 0,           // ← never expand beyond content
   },
   activeTabText: {
     color: '#1a1a1a',
-    fontWeight: 'bold',
-    fontSize: 14,
-    marginLeft: 8,
+    fontWeight: '700',
+    fontSize: 13,
   },
   inactiveTab: {
-    flex: 1,
+    flex: 1,               // ← each inactive tab gets equal share of remaining space
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 10,
+    paddingVertical: 9,
+    minWidth: 0,
   },
   fab: {
-    width: 65,
-    height: 65,
-    borderRadius: 33,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
     backgroundColor: '#FF6B00',
     justifyContent: 'center',
     alignItems: 'center',
-    // High elevation/shadow for FAB
+    flexShrink: 0,
     ...Platform.select({
-      ios: {
-        shadowColor: '#FF6B00',
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.4,
-        shadowRadius: 10,
-      },
-      android: {
-        elevation: 10,
-      },
+      ios: { shadowColor: '#FF6B00', shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.4, shadowRadius: 8 },
+      android: { elevation: 10 },
     }),
   },
 });

@@ -8,10 +8,23 @@ export class ActivityController {
   static async getTodayActivity(request: FastifyRequest, reply: FastifyReply) {
     try {
       const userId = (request.user as any).id;
-      const activity = await ActivityService.getOrCreateTodayActivity(userId);
-      return sendSuccess(reply, activity, 'Today activity fetched successfully');
+      const date = (request.query as any).date;
+      const activity = await ActivityService.getOrCreateTodayActivity(userId, date);
+      return sendSuccess(reply, activity, 'Activity fetched successfully');
     } catch (error) {
       logger.error({ err: error, user: request.user }, 'Error GET activity/today');
+      throw error;
+    }
+  }
+
+  static async getActivityLog(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const userId = (request.user as any).id;
+      const { date } = z.object({ date: z.string().optional() }).parse(request.query);
+      const log = await ActivityService.getActivityLog(userId, date || new Date().toISOString().split('T')[0]);
+      return sendSuccess(reply, log || { exercises: [], steps: 0, totalCaloriesBurnt: 0 }, 'Activity log fetched successfully');
+    } catch (error) {
+      logger.error({ err: error, user: request.user }, 'Error GET activity/log');
       throw error;
     }
   }
@@ -19,9 +32,12 @@ export class ActivityController {
   static async updateSteps(request: FastifyRequest, reply: FastifyReply) {
     try {
       const userId = (request.user as any).id;
-      const { steps } = z.object({ steps: z.number() }).parse(request.body);
+      const { steps, date } = z.object({ 
+        steps: z.number(),
+        date: z.string().optional()
+      }).parse(request.body);
       
-      const activity = await ActivityService.updateSteps(userId, steps);
+      const activity = await ActivityService.updateSteps(userId, steps, date);
       return sendSuccess(reply, activity, 'Steps updated successfully');
     } catch (error) {
       logger.error({ err: error, user: request.user }, 'Error PATCH activity/steps');
@@ -39,6 +55,7 @@ export class ActivityController {
         reps: z.number().optional(),
         isDaily: z.boolean().optional(),
         days: z.array(z.string()).optional(),
+        date: z.string().optional(),
       }).parse(request.body);
 
       const activity = await ActivityService.logExercise(userId, {
@@ -48,6 +65,7 @@ export class ActivityController {
         ...(exerciseData.reps !== undefined && { reps: exerciseData.reps }),
         ...(exerciseData.isDaily !== undefined && { isDaily: exerciseData.isDaily }),
         ...(exerciseData.days !== undefined && { days: exerciseData.days }),
+        ...(exerciseData.date !== undefined && { date: exerciseData.date }),
       });
       return sendSuccess(reply, activity, 'Exercise logged successfully');
     } catch (error) {
@@ -148,6 +166,29 @@ export class ActivityController {
       return sendSuccess(reply, routine, 'Routine deleted successfully');
     } catch (error) {
       logger.error({ err: error, user: request.user }, 'Error DELETE activity/routine');
+      throw error;
+    }
+  }
+
+  static async workoutCheckin(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const userId = (request.user as any).id;
+      const { done, remindLater } = z.object({
+        done: z.boolean().optional(),
+        remindLater: z.boolean().optional(),
+      }).parse(request.body);
+
+      const payload: { done?: boolean; remindLater?: boolean } = {};
+      if (done !== undefined) payload.done = done;
+      if (remindLater !== undefined) payload.remindLater = remindLater;
+
+      const response = await ActivityService.workoutCheckin(userId, payload);
+      return sendSuccess(reply, response, 'Workout checkin processed successfully');
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return reply.status(400).send({ success: false, message: 'Invalid checkin payload', errors: error.errors });
+      }
+      logger.error({ err: error, user: request.user }, 'Error PATCH activity/workout-checkin');
       throw error;
     }
   }

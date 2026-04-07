@@ -24,6 +24,7 @@ type GoalContextType = {
   goals: Goals;
   isLoading: boolean;
   refreshGoals: () => Promise<void>;
+  setGoals: React.Dispatch<React.SetStateAction<Goals>>;
 };
 
 // Sensible defaults while loading
@@ -44,6 +45,7 @@ const GoalContext = createContext<GoalContextType>({
   goals: DEFAULT_GOALS,
   isLoading: true,
   refreshGoals: async () => {},
+  setGoals: () => {},
 });
 
 // ─── Provider ─────────────────────────────────────────────────────────────────
@@ -56,7 +58,7 @@ export function GoalProvider({ children }: { children: React.ReactNode }) {
     try {
       const response = await api.get('/api/v1/profile/goals');
       if (response.data.success) {
-        setGoals(response.data.data);
+        setGoals((prev) => ({ ...DEFAULT_GOALS, ...(response.data.data || {}) }));
       }
     } catch (_) {
       // Silently fail — default goals remain in place
@@ -70,7 +72,7 @@ export function GoalProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <GoalContext.Provider value={{ goals, isLoading, refreshGoals }}>
+    <GoalContext.Provider value={{ goals, isLoading, refreshGoals, setGoals }}>
       {children}
     </GoalContext.Provider>
   );

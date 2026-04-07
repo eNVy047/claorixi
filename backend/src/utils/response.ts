@@ -30,3 +30,17 @@ export function sendCreated<T>(reply: FastifyReply, data: T, message = 'Created'
 export function sendNoContent(reply: FastifyReply): FastifyReply {
   return reply.status(204).send();
 }
+
+export function sendError(
+  reply: FastifyReply,
+  statusCode: number,
+  message: string,
+  errors?: unknown,
+): FastifyReply {
+  return reply.status(statusCode).send({
+    success: false,
+    message,
+    ...(errors ? { errors } : {}),
+  });
+}
+

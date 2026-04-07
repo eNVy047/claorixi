@@ -9,7 +9,9 @@ import {
   Alert,
   ActivityIndicator,
   TextInput,
-  Image
+  Image,
+  Modal,
+  Dimensions
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -27,7 +29,10 @@ type UserData = {
   weightKg: number;
   activityLevel: string;
   tdee: number;
+  subscriptionStatus?: 'trial' | 'active' | 'expired' | 'none';
+  subscriptionEndDate?: string;
 };
+
 
 type ProfileData = {
   age: number;
@@ -39,6 +44,8 @@ type ProfileData = {
   dietPreference: string;
   bmi: number;
   dailyCalories: number;
+  targetWeight?: number;
+  workoutTimePreference: string;
   profileImage?: string;
 };
 
@@ -46,6 +53,7 @@ const GENDER_OPTIONS = ['male', 'female', 'other'];
 const ACTIVITY_OPTIONS = ['sedentary', 'light', 'moderate', 'active', 'very_active'];
 const GOAL_OPTIONS = ['lose_weight', 'stay_fit', 'build_muscle'];
 const DIET_OPTIONS = ['veg', 'non_veg', 'vegan'];
+const WORKOUT_TIME_OPTIONS = ['morning', 'afternoon', 'evening', 'night', 'flexible'];
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -67,6 +75,8 @@ export default function ProfileScreen() {
   const [editGoal, setEditGoal] = useState('');
   const [editDiet, setEditDiet] = useState('');
   const [editName, setEditName] = useState('');
+  const [editTargetWeight, setEditTargetWeight] = useState('');
+  const [editWorkoutPreference, setEditWorkoutPreference] = useState('');
 
   const CACHE_KEY = '@profile_data';
 
@@ -111,6 +121,8 @@ export default function ProfileScreen() {
       setEditActivity(data.profile.activityLevel);
       setEditGoal(data.profile.fitnessGoal);
       setEditDiet(data.profile.dietPreference);
+      setEditTargetWeight(data.profile.targetWeight ? String(data.profile.targetWeight) : '');
+      setEditWorkoutPreference(data.profile.workoutTimePreference || 'flexible');
     }
   };
 
@@ -167,9 +179,21 @@ export default function ProfileScreen() {
     }
   };
 
+  const { setGoals } = useGoals();
+  const [showGoalModal, setShowGoalModal] = useState(false);
+  const [newGoalsSummary, setNewGoalsSummary] = useState({ calories: 0, protein: 0 });
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3000);
+  };
+
   const saveChanges = async () => {
     try {
       setSaving(true);
+      const isWeightChanged = Number(editWeight) !== profile?.weightKg;
+
       const payload = {
         fullName: editName,
         age: Number(editAge),
@@ -179,6 +203,8 @@ export default function ProfileScreen() {
         activityLevel: editActivity,
         fitnessGoal: editGoal,
         dietPreference: editDiet,
+        targetWeight: Number(editTargetWeight),
+        workoutTimePreference: editWorkoutPreference,
       };
 
       const res = await api.put('/api/v1/profile/update', payload);
@@ -186,11 +212,26 @@ export default function ProfileScreen() {
         const newData = res.data.data;
         setUser(newData.user);
         setProfile(newData.profile);
-        setIsEditMode(false);
+        
+        // Update GoalContext in real-time
+        if (newData.goals) {
+          setGoals(newData.goals);
+          setNewGoalsSummary({
+            calories: newData.goals.calorieGoal,
+            protein: newData.goals.proteinGoal,
+          });
+        }
+
         // Update cache
         await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(newData));
-        // Refresh goals in context since profile stats may have changed
-        refreshGoals();
+        
+        showToast("✅ Goals updated based on your new profile!");
+
+        if (isWeightChanged) {
+          setShowGoalModal(true);
+        } else {
+          setIsEditMode(false);
+        }
       }
     } catch (err: any) {
       console.error(err.response?.data || err.message);
@@ -312,9 +353,40 @@ export default function ProfileScreen() {
           </View>
         </View>
 
+        {/* SUBSCRIPTION CARD */}
+        {user?.subscriptionStatus === 'active' ? (
+          <View style={[styles.card, styles.proCard]}>
+            <View style={styles.proHeader}>
+              <Text style={styles.proTitle}>✅ PRO Member</Text>
+              <View><Text style={styles.crownIcon}>👑</Text></View>
+            </View>
+            <Text style={styles.proExpiry}>
+              Expires on: {user.subscriptionEndDate ? new Date(user.subscriptionEndDate).toLocaleDateString() : 'N/A'}
+            </Text>
+            <TouchableOpacity onPress={() => Alert.alert('Manage Subscription', 'Please manage your subscription through the app store.')}>
+              <Text style={styles.manageLink}>Manage Subscription</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <TouchableOpacity 
+            style={[styles.card, styles.upgradeCard]}
+            onPress={() => router.push('/paywall')}
+          >
+            <View style={styles.upgradeHeader}>
+              <Text style={styles.upgradeTitle}>Upgrade to PRO 👑</Text>
+              <View style={styles.upgradeBadge}><Text style={styles.upgradeBadgeText}>SAVE 50%</Text></View>
+            </View>
+            <Text style={styles.upgradeSubtitle}>Get AI Food Scanner, Unlimited meal logging, analytics and more!</Text>
+            <View style={[styles.saveBtn, { marginTop: 12, paddingVertical: 12 }]}>
+              <Text style={styles.saveBtnText}>Upgrade Now</Text>
+            </View>
+          </TouchableOpacity>
+        )}
+
         {/* INFO SECTION */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Personal Info</Text>
+
 
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>Age</Text>
@@ -349,6 +421,25 @@ export default function ProfileScreen() {
             ) : (
               <Text style={styles.infoVal}>{profile?.weightKg} kg</Text>
             )}
+          </View>
+          <View style={styles.divider} />
+
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Target Weight</Text>
+            {isEditMode ? (
+              <View style={styles.inputGroup}>
+                <TextInput style={styles.textInputShort} value={editTargetWeight} onChangeText={setEditTargetWeight} keyboardType="numeric" />
+                <Text> kg</Text>
+              </View>
+            ) : (
+              <Text style={styles.infoVal}>{profile?.targetWeight || '--'} kg</Text>
+            )}
+          </View>
+          <View style={styles.divider} />
+
+          <View style={styles.infoCol}>
+            <Text style={styles.infoLabel}>Workout Preference</Text>
+            {isEditMode ? renderChipOptions(WORKOUT_TIME_OPTIONS, editWorkoutPreference, setEditWorkoutPreference) : <Text style={styles.infoVal}>{profile?.workoutTimePreference}</Text>}
           </View>
           <View style={styles.divider} />
 
@@ -396,6 +487,50 @@ export default function ProfileScreen() {
         )}
 
       </ScrollView>
+
+      {/* TOAST MESSAGE */}
+      {toastMessage && (
+        <View style={styles.toastContainer}>
+          <Text style={styles.toastText}>{toastMessage}</Text>
+        </View>
+      )}
+
+      {/* GOAL SUMMARY MODAL */}
+      <Modal
+        visible={showGoalModal}
+        transparent={true}
+        animationType="fade"
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>New Goals Calculated!</Text>
+            <Text style={styles.modalSubtitle}>Based on your new weight, we've updated your daily targets:</Text>
+            
+            <View style={styles.modalStatRow}>
+              <View style={styles.modalStat}>
+                <Text style={styles.modalStatSymbol}>🔥</Text>
+                <Text style={styles.modalStatLabel}>Calorie Goal</Text>
+                <Text style={styles.modalStatVal}>{newGoalsSummary.calories} kcal</Text>
+              </View>
+              <View style={styles.modalStat}>
+                <Text style={styles.modalStatSymbol}>🥩</Text>
+                <Text style={styles.modalStatLabel}>Protein Goal</Text>
+                <Text style={styles.modalStatVal}>{newGoalsSummary.protein}g</Text>
+              </View>
+            </View>
+
+            <TouchableOpacity 
+              style={styles.modalCloseBtn}
+              onPress={() => {
+                setShowGoalModal(false);
+                setIsEditMode(false);
+              }}
+            >
+              <Text style={styles.modalCloseBtnText}>Awesome!</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -662,5 +797,152 @@ const styles = StyleSheet.create({
     color: '#888',
     fontSize: 14,
     textDecorationLine: 'underline',
-  }
+  },
+  toastContainer: {
+    position: 'absolute',
+    bottom: 50,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  toastText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 24,
+    padding: 24,
+    width: '100%',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 5,
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 8,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: 20,
+  },
+  modalStatRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    width: '100%',
+    marginBottom: 24,
+  },
+  modalStat: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  modalStatSymbol: {
+    fontSize: 24,
+    marginBottom: 8,
+  },
+  modalStatLabel: {
+    fontSize: 12,
+    color: '#888',
+    marginBottom: 4,
+  },
+  modalStatVal: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  modalCloseBtn: {
+    backgroundColor: '#FF8C00',
+    paddingVertical: 14,
+    paddingHorizontal: 40,
+    borderRadius: 16,
+    width: '100%',
+    alignItems: 'center',
+  },
+  modalCloseBtnText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  proCard: {
+    backgroundColor: '#E8F5E9',
+    borderColor: '#4CAF50',
+    borderWidth: 1,
+  },
+  proHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  proTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#2E7D32',
+  },
+  crownIcon: {
+    fontSize: 20,
+  },
+  proExpiry: {
+    fontSize: 14,
+    color: '#4CAF50',
+    marginBottom: 8,
+  },
+  manageLink: {
+    fontSize: 14,
+    color: '#1976D2',
+    textDecorationLine: 'underline',
+  },
+  upgradeCard: {
+    backgroundColor: '#6C63FF',
+    padding: 16,
+    borderWidth: 0,
+  },
+  upgradeHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  upgradeTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  upgradeBadge: {
+    backgroundColor: '#FFD700',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  upgradeBadgeText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#000',
+  },
+  upgradeSubtitle: {
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.8)',
+    lineHeight: 20,
+  },
 });
+

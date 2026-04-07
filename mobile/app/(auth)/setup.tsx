@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { 
-  View, 
-  Text, 
-  TouchableOpacity, 
-  StyleSheet, 
-  ActivityIndicator, 
-  KeyboardAvoidingView, 
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  ActivityIndicator,
+  KeyboardAvoidingView,
   Platform,
   Dimensions,
   TextInput,
@@ -25,13 +25,15 @@ type StepData = {
   fitnessGoal: 'lose_weight' | 'build_muscle' | 'stay_fit' | '';
   activityLevel: 'sedentary' | 'light' | 'moderate' | 'active' | 'very_active' | '';
   dietPreference: 'veg' | 'non_veg' | 'vegan' | '';
+  targetWeight: string;
+  workoutTimePreference: 'morning' | 'afternoon' | 'evening' | 'night' | 'flexible' | '';
 };
 
 export default function SetupScreen() {
   const router = useRouter();
   const [currentStep, setCurrentStep] = useState(1);
-  const totalSteps = 4;
-  
+  const totalSteps = 5;
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
 
@@ -43,6 +45,8 @@ export default function SetupScreen() {
     fitnessGoal: '',
     activityLevel: '',
     dietPreference: '',
+    targetWeight: '',
+    workoutTimePreference: 'flexible',
   });
 
   const nextStep = () => {
@@ -61,7 +65,9 @@ export default function SetupScreen() {
       case 3:
         return formData.fitnessGoal && formData.activityLevel;
       case 4:
-        return formData.dietPreference !== '';
+        return formData.dietPreference !== '' && formData.targetWeight !== '';
+      case 5:
+        return formData.workoutTimePreference !== '';
       default:
         return false;
     }
@@ -79,16 +85,17 @@ export default function SetupScreen() {
         fitnessGoal: formData.fitnessGoal,
         activityLevel: formData.activityLevel,
         dietPreference: formData.dietPreference,
+        targetWeight: Number(formData.targetWeight),
+        workoutTimePreference: formData.workoutTimePreference,
       });
 
       if (response.data.success) {
-        // Setup complete, user is verified, move to dashboard
-        router.replace('/(tabs)/(dashboard)');
+        // Setup complete, move to Paywall
+        router.replace('/paywall');
       }
     } catch (err: any) {
       setIsSubmitting(false);
       setApiError(err.response?.data?.message || 'Failed to sync profile. Try again.');
-      console.log('Setup Error:', err.response?.data || err.message);
     }
   };
 
@@ -99,8 +106,8 @@ export default function SetupScreen() {
   );
 
   return (
-    <KeyboardAvoidingView 
-      style={styles.container} 
+    <KeyboardAvoidingView
+      style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <ScrollView contentContainerStyle={styles.scrollContainer}>
@@ -114,12 +121,12 @@ export default function SetupScreen() {
         {apiError && <Text style={styles.apiError}>{apiError}</Text>}
 
         <View style={styles.mainContent}>
-          
+
           {/* STEP 1: Age & Gender */}
           {currentStep === 1 && (
             <View style={styles.stepContainer}>
               <Text style={styles.question}>What is your age and gender?</Text>
-              
+
               <Text style={styles.label}>Age (years)</Text>
               <TextInput
                 style={styles.input}
@@ -133,8 +140,8 @@ export default function SetupScreen() {
               <Text style={[styles.label, { marginTop: 20 }]}>Gender</Text>
               <View style={styles.optionsRow}>
                 {['male', 'female', 'other'].map((g) => (
-                  <TouchableOpacity 
-                    key={g} 
+                  <TouchableOpacity
+                    key={g}
                     style={[styles.optionCard, formData.gender === g && styles.optionCardActive]}
                     onPress={() => setFormData({ ...formData, gender: g as any })}
                   >
@@ -151,7 +158,7 @@ export default function SetupScreen() {
           {currentStep === 2 && (
             <View style={styles.stepContainer}>
               <Text style={styles.question}>What are your current body metrics?</Text>
-              
+
               <Text style={styles.label}>Height (cm)</Text>
               <TextInput
                 style={styles.input}
@@ -184,8 +191,8 @@ export default function SetupScreen() {
                   { id: 'build_muscle', label: 'Build Muscle (+500 cal/day)' },
                   { id: 'stay_fit', label: 'Stay Fit (Maintenance)' }
                 ].map((goal) => (
-                  <TouchableOpacity 
-                    key={goal.id} 
+                  <TouchableOpacity
+                    key={goal.id}
                     style={[styles.optionRowList, formData.fitnessGoal === goal.id && styles.optionCardActive]}
                     onPress={() => setFormData({ ...formData, fitnessGoal: goal.id as any })}
                   >
@@ -204,8 +211,8 @@ export default function SetupScreen() {
                   { id: 'moderate', label: 'Moderately Active (3-5 days/wk)' },
                   { id: 'active', label: 'Very Active (6-7 days/wk)' },
                 ].map((act) => (
-                  <TouchableOpacity 
-                    key={act.id} 
+                  <TouchableOpacity
+                    key={act.id}
                     style={[styles.optionRowList, formData.activityLevel === act.id && styles.optionCardActive]}
                     onPress={() => setFormData({ ...formData, activityLevel: act.id as any })}
                   >
@@ -228,13 +235,49 @@ export default function SetupScreen() {
                   { id: 'non_veg', label: 'Non-Vegetarian (Omnivore)' },
                   { id: 'vegan', label: 'Vegan' },
                 ].map((diet) => (
-                  <TouchableOpacity 
-                    key={diet.id} 
+                  <TouchableOpacity
+                    key={diet.id}
                     style={[styles.optionRowList, formData.dietPreference === diet.id && styles.optionCardActive]}
                     onPress={() => setFormData({ ...formData, dietPreference: diet.id as any })}
                   >
                     <Text style={[styles.optionRowText, formData.dietPreference === diet.id && styles.optionTextActive]}>
                       {diet.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={[styles.label, { marginTop: 30 }]}>Target Weight (kg)</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="65"
+                keyboardType="numeric"
+                value={formData.targetWeight}
+                onChangeText={(text) => setFormData({ ...formData, targetWeight: text.replace(/[^0-9]/g, '') })}
+                maxLength={3}
+              />
+            </View>
+          )}
+
+          {/* STEP 5: Workout Preference */}
+          {currentStep === 5 && (
+            <View style={styles.stepContainer}>
+              <Text style={styles.question}>When do you prefer to workout?</Text>
+              <View style={styles.optionsColumn}>
+                {[
+                  { id: 'morning', label: '🌅 Morning (6–9 AM)', emoji: '🌅' },
+                  { id: 'afternoon', label: '☀️ Afternoon (12–3 PM)', emoji: '☀️' },
+                  { id: 'evening', label: '🌆 Evening (5–8 PM)', emoji: '🌆' },
+                  { id: 'night', label: '🌙 Night (8–11 PM)', emoji: '🌙' },
+                  { id: 'flexible', label: '⚡ Flexible', emoji: '⚡' },
+                ].map((pref) => (
+                  <TouchableOpacity
+                    key={pref.id}
+                    style={[styles.optionRowList, formData.workoutTimePreference === pref.id && styles.optionCardActive]}
+                    onPress={() => setFormData({ ...formData, workoutTimePreference: pref.id as any })}
+                  >
+                    <Text style={[styles.optionRowText, formData.workoutTimePreference === pref.id && styles.optionTextActive]}>
+                      {pref.label}
                     </Text>
                   </TouchableOpacity>
                 ))}
@@ -252,8 +295,8 @@ export default function SetupScreen() {
             </TouchableOpacity>
           ) : <View style={{ flex: 1 }} />}
 
-          <TouchableOpacity 
-            style={[styles.nextButton, !isStepValid() && styles.nextButtonDisabled]} 
+          <TouchableOpacity
+            style={[styles.nextButton, !isStepValid() && styles.nextButtonDisabled]}
             onPress={currentStep === totalSteps ? onSubmit : nextStep}
             disabled={!isStepValid() || isSubmitting}
           >

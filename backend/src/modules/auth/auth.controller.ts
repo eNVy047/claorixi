@@ -18,6 +18,7 @@ export class AuthController {
         id: user._id.toString(),
         email: user.email,
         subscriptionTier: user.subscriptionTier,
+        subscriptionStatus: user.subscriptionStatus,
       });
 
       // Send response without passwordHash
@@ -26,6 +27,8 @@ export class AuthController {
         fullName: user.fullName,
         email: user.email,
         subscriptionTier: user.subscriptionTier,
+        subscriptionStatus: user.subscriptionStatus,
+        subscriptionEndDate: user.subscriptionEndDate,
       };
 
       return sendCreated(reply, { user: userData, token }, 'User registered successfully');
@@ -49,6 +52,7 @@ export class AuthController {
         id: user._id.toString(),
         email: user.email,
         subscriptionTier: user.subscriptionTier,
+        subscriptionStatus: user.subscriptionStatus,
       });
       console.log('JWT Token generated.');
 
@@ -57,6 +61,8 @@ export class AuthController {
         fullName: user.fullName,
         email: user.email,
         subscriptionTier: user.subscriptionTier,
+        subscriptionStatus: user.subscriptionStatus,
+        subscriptionEndDate: user.subscriptionEndDate,
       };
 
       console.log('Sending successful response.');
@@ -80,7 +86,12 @@ export class AuthController {
   static async verifyToken(request: FastifyRequest, reply: FastifyReply) {
     try {
       // request.user is populated by fastify.authenticate middleware
-      const jwtUser = request.user as { id: string; email: string; subscriptionTier: string };
+      const jwtUser = request.user as { 
+        id: string; 
+        email: string; 
+        subscriptionTier: string;
+        subscriptionStatus: string;
+      };
       return sendSuccess(reply, { user: jwtUser }, 'Token is valid');
     } catch (error) {
       logger.error({ err: error }, 'Error in AuthController.verifyToken');

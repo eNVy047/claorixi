@@ -2,17 +2,66 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity,
   Image, Animated, AppState, ActivityIndicator,
-  Alert, Modal, TextInput, StyleSheet, Platform
+  Alert, Modal, TextInput, StyleSheet, Platform, PanResponder
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
-import Svg, { Path, Circle, G } from 'react-native-svg';
+import Svg, { Path, Circle, G, Text as SvgText } from 'react-native-svg';
 import { Pedometer } from 'expo-sensors';
 import { api } from '../../../lib/api';
 import { useGoals } from '../../../context/GoalContext';
+import { useNotifications } from '../../../context/NotificationContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { format, startOfWeek, addDays, isToday, isFuture, parseISO } from 'date-fns';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import * as Notifications from 'expo-notifications';
+import * as Device from 'expo-device';
+import Constants from 'expo-constants';
+import { setStepsForBackgroundSync } from '../../../lib/stepsBackground';
+
+// Configure notification behavior
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+    // Add banner and list for newer SDK versions
+    shouldShowBanner: true,
+    shouldShowList: true,
+  } as any),
+});
+
+// Define notification categories for interactive buttons
+Notifications.setNotificationCategoryAsync('workout-checkin', [
+  {
+    identifier: 'yes',
+    buttonTitle: 'Yes, I did! 💪',
+    options: { opensAppToForeground: true },
+  },
+  {
+    identifier: 'remind-later',
+    buttonTitle: 'Remind me later ⏰',
+    options: { opensAppToForeground: false },
+  },
+  {
+    identifier: 'no',
+    buttonTitle: 'Not yet',
+    options: { opensAppToForeground: false },
+  },
+]);
+
+Notifications.setNotificationCategoryAsync('workout-checkin-final', [
+  {
+    identifier: 'yes',
+    buttonTitle: 'Yes, log it ✅',
+    options: { opensAppToForeground: true },
+  },
+  {
+    identifier: 'no',
+    buttonTitle: 'No, skip today',
+    options: { opensAppToForeground: false },
+  },
+]);
 
 const DATE_STORAGE_KEY = 'lastKnownDate';
 
@@ -55,6 +104,7 @@ type ActivityLog = {
     sets?: number;
     reps?: number;
     isRoutine?: boolean;
+    fromRoutine?: boolean;
   }[];
   bedtime?: string;
   wakeTime?: string;
@@ -66,6 +116,7 @@ type Routine = {
   _id: string;
   exerciseName: string;
   duration: number;
+  met: number;
   sets?: number;
   reps?: number;
   days: string[];
@@ -80,6 +131,7 @@ type Exercise = {
 export default function DashboardScreen() {
   const router = useRouter();
   const { goals } = useGoals();
+  const { unreadCount } = useNotifications();
 
   const [loading, setLoading] = useState(true);
   const [log, setLog] = useState<DailyLog | null>(null);
@@ -88,21 +140,69 @@ export default function DashboardScreen() {
   const [profileImage, setProfileImage] = useState<string | null>(null);
   const [initials, setInitials] = useState('?');
   const [userWeight, setUserWeight] = useState(70);
+  const [userHeightCm, setUserHeightCm] = useState(170);
 
   // Calendar state
   const [weekDays, setWeekDays] = useState<WeekDay[]>([]);
   const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const todayDate = format(new Date(), 'yyyy-MM-dd');
+  const isTodaySelected = selectedDate === todayDate;
 
   // Animated fade for card transitions
   const fadeAnim = useRef(new Animated.Value(1)).current;
 
+  // Notification listeners refs
+  const notificationListener = useRef<any>(null);
+  const responseListener = useRef<any>(null);
+
   // Steps state
   const [currentStepCount, setCurrentStepCount] = useState(0);
+  const lastStepWasBelowThresholdRef = useRef(true);
+  const lastStepAtMsRef = useRef(0);
+  const lastStepDayRef = useRef<string>(format(new Date(), 'yyyy-MM-dd'));
 
   // Exercise Logging Modal State
   const [isLogModalVisible, setIsLogModalVisible] = useState(false);
   const [exerciseLibrary, setExerciseLibrary] = useState<Exercise[]>([]);
+
+  // Push Notifications Listeners
+  useEffect(() => {
+    notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
+      console.log('Notification Received:', notification);
+    });
+
+    responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
+      handleNotificationResponse(response);
+    });
+
+    return () => {
+      notificationListener.current?.remove();
+      responseListener.current?.remove();
+    };
+  }, []);
+
+
+  const handleNotificationResponse = async (response: Notifications.NotificationResponse) => {
+    const actionId = response.actionIdentifier;
+    const data: any = response.notification.request.content.data || {};
+    const category = data.categoryIdentifier;
+
+    try {
+      if (actionId === 'yes') {
+        await api.patch('/api/v1/activity/workout-checkin', { done: true });
+        // Navigate to Activities tab and open Add Exercise modal
+        setActiveTab('Activities');
+        setIsLogModalVisible(true);
+      } else if (actionId === 'remind-later') {
+        await api.patch('/api/v1/activity/workout-checkin', { remindLater: true });
+      } else if (actionId === 'no') {
+        await api.patch('/api/v1/activity/workout-checkin', { done: false });
+      }
+    } catch (error) {
+      console.error('Check-in Action Error:', error);
+    }
+  };
+
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedExercise, setSelectedExercise] = useState<Exercise | null>(null);
   const [duration, setDuration] = useState('');
@@ -112,13 +212,88 @@ export default function DashboardScreen() {
   const [selectedDays, setSelectedDays] = useState<string[]>([]);
   const [routines, setRoutines] = useState<Routine[]>([]);
 
-  // Sleep state
-  const [tempBedtime, setTempBedtime] = useState(new Date());
-  const [tempWakeTime, setTempWakeTime] = useState(new Date());
-  const [sleepQuality, setSleepQuality] = useState<'😴' | '😐' | '😊'>('😊');
-  const [isSleepDaily, setIsSleepDaily] = useState(false);
-  const [showBedPicker, setShowBedPicker] = useState(false);
-  const [showWakePicker, setShowWakePicker] = useState(false);
+  // New Sleep state
+  const [showSleepDrawer, setShowSleepDrawer] = useState(false);
+  const [bedAngle, setBedAngle] = useState((22.5 / 24) * 360); // 10:30 PM
+  const [wakeAngle, setWakeAngle] = useState((7.5 / 24) * 360); // 7:30 AM
+  const draggingHandRef = useRef<'bed' | 'wake' | null>(null);
+  const bedAngleRef = useRef(bedAngle);
+  const wakeAngleRef = useRef(wakeAngle);
+
+  useEffect(() => { bedAngleRef.current = bedAngle; }, [bedAngle]);
+  useEffect(() => { wakeAngleRef.current = wakeAngle; }, [wakeAngle]);
+
+  const timeFromAngle = (angle: number) => {
+    let hr = (angle / 360) * 24;
+    let totalMins = Math.round((hr * 60) / 10) * 10;
+    let h = Math.floor(totalMins / 60);
+    let m = totalMins % 60;
+    if (h >= 24) h -= 24;
+    return { h, m, totalMins };
+  };
+
+  const formatTime = (h: number, m: number) => {
+    const ampm = h >= 12 ? 'pm' : 'am';
+    let hr12 = h % 12;
+    if (hr12 === 0) hr12 = 12;
+    return `${hr12}:${m.toString().padStart(2, '0')} ${ampm}`;
+  };
+
+  const bedTimeData = timeFromAngle(bedAngle);
+  const wakeTimeData = timeFromAngle(wakeAngle);
+
+  let sleepMins = wakeTimeData.totalMins - bedTimeData.totalMins;
+  if (sleepMins < 0) sleepMins += 24 * 60;
+  const sleepHrs = Math.floor(sleepMins / 60);
+  const sleepM = sleepMins % 60;
+
+  const clockPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: (evt) => {
+        const { locationX, locationY } = evt.nativeEvent;
+        const dx = locationX - 150;
+        const dy = locationY - 150;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 80 && dist < 160) {
+          let angle = Math.atan2(dy, dx) * 180 / Math.PI + 90;
+          if (angle < 0) angle += 360;
+          let bAngle = bedAngleRef.current;
+          let wAngle = wakeAngleRef.current;
+          let distBed = Math.min(Math.abs(angle - bAngle), 360 - Math.abs(angle - bAngle));
+          let distWake = Math.min(Math.abs(angle - wAngle), 360 - Math.abs(angle - wAngle));
+          draggingHandRef.current = distBed < distWake ? 'bed' : 'wake';
+          return true;
+        }
+        return false;
+      },
+      onPanResponderMove: (evt) => {
+        const { locationX, locationY } = evt.nativeEvent;
+        const dx = locationX - 150;
+        const dy = locationY - 150;
+        let angle = Math.atan2(dy, dx) * 180 / Math.PI + 90;
+        if (angle < 0) angle += 360;
+        if (draggingHandRef.current === 'bed') {
+          setBedAngle(angle);
+        } else if (draggingHandRef.current === 'wake') {
+          setWakeAngle(angle);
+        }
+      }
+    })
+  ).current;
+
+  const polarToCartesian = (cx: number, cy: number, r: number, angle: number) => {
+    let rad = (angle - 90) * Math.PI / 180.0;
+    return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+  };
+
+  const getArcPath = (x: number, y: number, radius: number, startAngle: number, endAngle: number) => {
+    let start = polarToCartesian(x, y, radius, startAngle);
+    let end = polarToCartesian(x, y, radius, endAngle);
+    let diff = endAngle - startAngle;
+    if (diff < 0) diff += 360;
+    let largeArc = diff > 180 ? 1 : 0;
+    return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArc} 1 ${end.x} ${end.y}`;
+  };
 
   // Build the current week days array (Sun–Sat)
   const buildWeekDays = useCallback((weekLogs: any[]) => {
@@ -179,10 +354,14 @@ export default function DashboardScreen() {
     return () => subscription.remove();
   }, []);
 
+  useEffect(() => {
+    fetchRoutines();
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       fetchDayLog(selectedDate);
-      fetchActivityData();
+      fetchActivityData(selectedDate);
       fetchProfileImage();
       fetchWeekLogs();
       fetchRoutines();
@@ -197,20 +376,48 @@ export default function DashboardScreen() {
     return () => clearInterval(syncInterval);
   }, [currentStepCount]);
 
-  // Pedometer subscription
+  // Final sync when app goes background/inactive
   useEffect(() => {
-    let subscription: any = null;
-    const subscribe = async () => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if ((state === 'background' || state === 'inactive') && currentStepCount > 0) {
+        syncSteps();
+      }
+    });
+    return () => sub.remove();
+  }, [currentStepCount, activity]);
+
+  // Pedometer-based step detection (uses OS background tracking)
+  useEffect(() => {
+    let subscription: Pedometer.Subscription | null = null;
+    let lastCumulative = 0;
+
+    const startTracking = async () => {
+      const perm = await Pedometer.requestPermissionsAsync();
+      if (perm.status !== 'granted') return;
+
       const isAvailable = await Pedometer.isAvailableAsync();
       if (isAvailable) {
         subscription = Pedometer.watchStepCount(result => {
-          setCurrentStepCount(prev => prev + result.steps);
+          const delta = result.steps - lastCumulative;
+          lastCumulative = result.steps;
+          if (delta > 0) {
+            setCurrentStepCount(prev => prev + delta);
+          }
         });
       }
     };
-    subscribe();
-    return () => subscription && subscription.remove();
+
+    startTracking();
+    return () => subscription?.remove();
   }, []);
+
+
+
+  // Persist total steps for background sync (best-effort)
+  useEffect(() => {
+    const totalToday = (activity?.steps || 0) + currentStepCount;
+    setStepsForBackgroundSync(totalToday).catch(() => { });
+  }, [activity?.steps, currentStepCount]);
 
   const fetchDayLog = async (date: string) => {
     try {
@@ -238,7 +445,10 @@ export default function DashboardScreen() {
   const syncSteps = async () => {
     try {
       const newTotal = (activity?.steps || 0) + currentStepCount;
-      const response = await api.patch('/api/v1/activity/steps', { steps: newTotal });
+      const response = await api.patch('/api/v1/activity/steps', { 
+        steps: newTotal,
+        date: selectedDate
+      });
       if (response.data.success) {
         setActivity(response.data.data);
         setCurrentStepCount(0);
@@ -249,13 +459,35 @@ export default function DashboardScreen() {
     }
   };
 
-  const fetchActivityData = async () => {
+  const fetchActivityData = async (date: string) => {
     try {
-      const response = await api.get('/api/v1/activity/today');
-      if (response.data.success) setActivity(response.data.data);
+      const response = await api.get(`/api/v1/activity/log?date=${date}`);
+      if (response.data.success) {
+        setActivity(response.data.data);
+      }
     } catch (error: any) {
       console.error('Error fetching activity:', error.response?.data || error.message);
     }
+  };
+
+  const fetchRoutines = async () => {
+    try {
+      const response = await api.get('/api/v1/activity/routine');
+      if (response.data.success) {
+        setRoutines(response.data.data.exerciseRoutines || []);
+        setUserWeight(response.data.data.userWeight || 70);
+      }
+    } catch (_) { }
+  };
+
+  const deleteRoutine = async (id: string) => {
+    try {
+      const response = await api.delete(`/api/v1/activity/routine/${id}`);
+      if (response.data.success) {
+        fetchRoutines();
+        fetchDayLog(selectedDate);
+      }
+    } catch (_) { }
   };
 
   const fetchExerciseLibrary = async () => {
@@ -284,6 +516,7 @@ export default function DashboardScreen() {
         reps: reps ? parseInt(reps) : undefined,
         isDaily: isDailyExercise,
         days: isDailyExercise ? selectedDays : undefined,
+        date: selectedDate,
       });
       if (response.data.success) {
         setActivity(response.data.data);
@@ -305,54 +538,30 @@ export default function DashboardScreen() {
     }
   };
 
-  const logSleep = async () => {
+  const saveNewSleep = async () => {
     try {
       setLoading(true);
-      const bedtimeStr = format(tempBedtime, 'HH:mm');
-      const wakeTimeStr = format(tempWakeTime, 'HH:mm');
-
-      // Calculate sleep hours
-      let diff = (tempWakeTime.getTime() - tempBedtime.getTime()) / (1000 * 60 * 60);
-      if (diff < 0) diff += 24;
-      const sleepHours = parseFloat(diff.toFixed(1));
+      const bedtimeStr = `${String(bedTimeData.h).padStart(2, '0')}:${String(bedTimeData.m).padStart(2, '0')}`;
+      const wakeTimeStr = `${String(wakeTimeData.h).padStart(2, '0')}:${String(wakeTimeData.m).padStart(2, '0')}`;
+      const sleepHours = parseFloat((sleepMins / 60).toFixed(1));
 
       const response = await api.post('/api/v1/activity/sleep', {
         date: selectedDate,
         bedtime: bedtimeStr,
         wakeTime: wakeTimeStr,
         sleepHours,
-        sleepQuality,
-        isDaily: isSleepDaily,
       });
 
       if (response.data.success) {
         setActivity(response.data.data);
         fetchDayLog(selectedDate);
+        setShowSleepDrawer(false);
       }
     } catch (_) {
-      Alert.alert('Error', 'Could not log sleep');
+      Alert.alert('Error', 'Could not save sleep');
     } finally {
       setLoading(false);
     }
-  };
-
-  const fetchRoutines = async () => {
-    try {
-      const response = await api.get('/api/v1/activity/routine');
-      if (response.data.success) {
-        setRoutines(response.data.data.exerciseRoutines);
-      }
-    } catch (_) { }
-  };
-
-  const deleteRoutine = async (id: string) => {
-    try {
-      const response = await api.delete(`/api/v1/activity/routine/${id}`);
-      if (response.data.success) {
-        fetchRoutines();
-        fetchDayLog(selectedDate);
-      }
-    } catch (_) { }
   };
 
   const deleteExercise = async (id: string) => {
@@ -373,6 +582,7 @@ export default function DashboardScreen() {
         const usr = response.data.data.user;
         if (prof?.profileImage) setProfileImage(prof.profileImage);
         if (prof?.weightKg) setUserWeight(prof.weightKg);
+        if (prof?.heightCm) setUserHeightCm(prof.heightCm);
         const name: string = usr?.fullName || usr?.email || '?';
         const parts = name.trim().split(' ');
         const ini = parts.length >= 2
@@ -387,7 +597,7 @@ export default function DashboardScreen() {
     if (!log || selectedDate !== todayDate) return; // Only today is editable
     setLog({ ...log, waterGlasses: log.waterGlasses + 1 });
     try {
-      await api.patch('/api/v1/dashboard/water');
+      await api.patch('/api/v1/dashboard/water', { date: selectedDate });
     } catch (_) {
       setLog({ ...log, waterGlasses: log.waterGlasses });
     }
@@ -539,6 +749,7 @@ export default function DashboardScreen() {
 
   const waterGoal = log?.waterGoal || goals.waterGlasses;
   const stepGoal = log?.stepGoal || goals.stepGoal;
+  const stepLengthMeters = (userHeightCm * 0.415) / 100;
 
   const proPct = Math.min(((log?.proteinConsumed || 0) / (log?.proteinGoal || goals.proteinGoal)) * 100, 100) || 0;
   const fatPct = Math.min(((log?.fatConsumed || 0) / (log?.fatGoal || goals.fatGoal)) * 100, 100) || 0;
@@ -575,6 +786,11 @@ export default function DashboardScreen() {
 
           <TouchableOpacity style={styles.bellIcon} onPress={() => router.push('/(tabs)/notification')}>
             <Text style={{ fontSize: 20 }}>🔔</Text>
+            {unreadCount > 0 && (
+              <View style={styles.badgeContainer}>
+                <Text style={styles.badgeText}>{unreadCount}</Text>
+              </View>
+            )}
           </TouchableOpacity>
         </View>
 
@@ -664,7 +880,7 @@ export default function DashboardScreen() {
                     <Text style={styles.macroEmoji}>🫐</Text>
                     <View style={styles.macroDetails}>
                       <Text style={styles.macroName}>Fat</Text>
-                      <View style={[styles.macroBar, { backgroundColor: '#6CB4F5' }]}>
+                      <View style={[styles.macroBar, { backgroundColor: '#F0F0F0' }]}>
                         <View style={[styles.macroBarFill, { width: `${fatPct}%`, backgroundColor: '#6CB4F5' }]} />
                       </View>
                       <Text style={styles.macroGrams}>{log?.fatConsumed || 0}g / {log?.fatGoal || goals.fatGoal}g</Text>
@@ -753,17 +969,17 @@ export default function DashboardScreen() {
                   <View style={styles.ringContainer}>
                     <Svg width={140} height={140}>
                       <Circle cx="70" cy="70" r="55" stroke="#F0E6D2" strokeWidth="10" fill="none" />
-                      <Circle cx="70" cy="70" r="55" stroke="#FF8C00" strokeWidth="10" strokeDasharray={`${2 * Math.PI * 55}`} strokeDashoffset={`${2 * Math.PI * 55 * (1 - Math.min((activity.steps + currentStepCount) / (goals.stepGoal || 8000), 1))}`} strokeLinecap="round" fill="none" transform="rotate(-90 70 70)" />
+                      <Circle cx="70" cy="70" r="55" stroke="#FF8C00" strokeWidth="10" strokeDasharray={`${2 * Math.PI * 55}`} strokeDashoffset={`${2 * Math.PI * 55 * (1 - Math.min((activity.steps + currentStepCount) / (stepGoal || 1), 1))}`} strokeLinecap="round" fill="none" transform="rotate(-90 70 70)" />
                     </Svg>
                     <View style={styles.ringCenterText}>
                       <Text style={styles.ringStepsVal}>{activity.steps + currentStepCount}</Text>
-                      <Text style={styles.ringStepsLabel}>/ {(goals.stepGoal || 8000).toLocaleString()}</Text>
+                      <Text style={styles.ringStepsLabel}>/ {(stepGoal || 0).toLocaleString()}</Text>
                     </View>
                   </View>
                   <View style={styles.stepStats}>
                     <View style={styles.stepStatItem}>
                       <Text style={styles.stepStatLabel}>Distance</Text>
-                      <Text style={styles.stepStatVal}>{((activity.steps + currentStepCount) * 0.0008).toFixed(2)} km</Text>
+                      <Text style={styles.stepStatVal}>{(((activity.steps + currentStepCount) * stepLengthMeters) / 1000).toFixed(2)} km</Text>
                     </View>
                     <View style={styles.stepStatItem}>
                       <Text style={styles.stepStatLabel}>Burned</Text>
@@ -779,9 +995,9 @@ export default function DashboardScreen() {
                   const liveStepCalories = Math.round((activity.steps + currentStepCount) * 0.04);
                   const exerciseCalories = activity.exercises?.reduce((sum: number, ex: any) => sum + (ex.caloriesBurnt || 0), 0) || 0;
                   const burnt = liveStepCalories + exerciseCalories;
-                  const goal = goals.caloriesBurntGoal || 500;
+                  const goal = goals.caloriesBurntGoal || 1;
                   const progress = Math.min(100, Math.round((burnt / goal) * 100));
-                  
+
                   let message = "Keep moving! You can do it 💪";
                   if (progress >= 100) message = "Goal crushed! Amazing work 🏆";
                   else if (progress >= 80) message = "Almost there! Push a little more ⚡";
@@ -802,7 +1018,7 @@ export default function DashboardScreen() {
                           <Text style={{ color: '#FF8C00', fontSize: 13, fontWeight: 'bold' }}>{progress}%</Text>
                         </View>
                         <View style={styles.progressBarBG}>
-                           <View style={[styles.progressBarFill, { width: `${progress}%`, backgroundColor: '#FF8C00' }]} />
+                          <View style={[styles.progressBarFill, { width: `${progress}%`, backgroundColor: '#FF8C00' }]} />
                         </View>
                         <Text style={{ textAlign: 'center', marginTop: 12, fontSize: 13, color: '#FF8C00', fontWeight: '500' }}>
                           {message}
@@ -812,13 +1028,13 @@ export default function DashboardScreen() {
                       <View style={{ marginTop: 15, paddingTop: 15, borderTopWidth: 1, borderColor: '#eee' }}>
                         <Text style={{ color: '#555', fontSize: 13, marginBottom: 8 }}>Breakdown:</Text>
                         <View style={[styles.rowCentered, { justifyContent: 'space-between', marginBottom: 5 }]}>
-                           <Text style={{ color: '#888' }}>Steps</Text>
-                           <Text style={{ fontWeight: '500' }}>{liveStepCalories} kcal</Text>
+                          <Text style={{ color: '#888' }}>Steps</Text>
+                          <Text style={{ fontWeight: '500' }}>{liveStepCalories} kcal</Text>
                         </View>
                         {activity.exercises?.map((ex: any, i: number) => (
                           <View key={i} style={[styles.rowCentered, { justifyContent: 'space-between', marginBottom: 5 }]}>
-                             <Text style={{ color: '#888' }}>{ex.name}</Text>
-                             <Text style={{ fontWeight: '500' }}>{ex.caloriesBurnt || 0} kcal</Text>
+                            <Text style={{ color: '#888' }}>{ex.name}</Text>
+                            <Text style={{ fontWeight: '500' }}>{ex.caloriesBurnt || 0} kcal</Text>
                           </View>
                         ))}
                       </View>
@@ -827,91 +1043,52 @@ export default function DashboardScreen() {
                 })()}
               </View>
 
-              {/* SLEEP CARD */}
-              <View style={styles.card}>
-                <View style={[styles.cardHeader, { marginBottom: 10 }]}>
-                  <View style={styles.rowCentered}>
-                    <Text style={{ fontSize: 24, marginRight: 8 }}>🌙</Text>
-                    <Text style={styles.cardTitle}>Log Sleep</Text>
+              {/* SLEEP CARD MINIMAL */}
+              <View style={[styles.card, { backgroundColor: '#1C1C1E', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 16 }]} >
+                {/* Left side */}
+                <View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                    <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: '#333', alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
+                      <Text style={{ fontSize: 18 }}>🛏️</Text>
+                    </View>
+                    <Text style={{ color: '#FFF', fontSize: 20, fontWeight: 'bold' }}>Sleep</Text>
                   </View>
-                </View>
-
-                {/* Sleep Pickers Buttons */}
-                <View style={styles.sleepPickerRow}>
-                  <TouchableOpacity style={styles.sleepPickerBox} onPress={() => setShowBedPicker(true)}>
-                    <Text style={styles.sleepPickerLabel}>Bedtime</Text>
-                    <Text style={styles.sleepPickerTime}>{format(tempBedtime, 'h:mm a')}</Text>
-                  </TouchableOpacity>
-                  <View style={{ width: 15 }} />
-                  <TouchableOpacity style={styles.sleepPickerBox} onPress={() => setShowWakePicker(true)}>
-                    <Text style={styles.sleepPickerLabel}>Wake Time</Text>
-                    <Text style={styles.sleepPickerTime}>{format(tempWakeTime, 'h:mm a')}</Text>
-                  </TouchableOpacity>
-                </View>
-
-                {/* Duration */}
-                <View style={{ alignItems: 'center', marginBottom: 20 }}>
-                  <Text style={{ fontSize: 16, color: '#555' }}>
-                    Calculated hours: <Text style={{ fontWeight: 'bold', color: '#FF8C00' }}>
-                      {(() => {
-                        let diff = (tempWakeTime.getTime() - tempBedtime.getTime()) / (1000 * 60 * 60);
-                        if (diff < 0) diff += 24;
-                        return `${Math.floor(diff)}h ${Math.round((diff % 1) * 60)}m`;
-                      })()}
-                    </Text>
-                  </Text>
-                </View>
-
-                {/* Quality */}
-                <Text style={styles.inputLabel}>Quality</Text>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-around', marginBottom: 20 }}>
-                  {['😴', '😐', '😊'].map((q: any) => (
-                    <TouchableOpacity
-                      key={q}
-                      onPress={() => setSleepQuality(q)}
-                      style={[styles.qualityBtn, sleepQuality === q && styles.qualityBtnActive]}
-                    >
-                      <Text style={{ fontSize: 36 }}>{q}</Text>
+                  {isTodaySelected && (
+                    <TouchableOpacity onPress={() => setShowSleepDrawer(true)} style={{ backgroundColor: '#FF6B00', paddingVertical: 8, paddingHorizontal: 24, borderRadius: 20, alignSelf: 'flex-start' }}>
+                      <Text style={{ color: '#FFF', fontWeight: 'bold' }}>Enter</Text>
                     </TouchableOpacity>
-                  ))}
+                  )}
                 </View>
 
-                {/* Toggle */}
-                <View style={styles.toggleRow}>
-                  <Text style={styles.toggleLabel}>Track: <Text style={{ fontWeight: 'bold', color: '#FF8C00' }}>{isSleepDaily ? 'Daily' : 'Today'}</Text></Text>
-                  <TouchableOpacity
-                    onPress={() => setIsSleepDaily(!isSleepDaily)}
-                    style={[styles.customToggle, isSleepDaily && styles.customToggleActive, { width: 60, height: 32, borderRadius: 16 }]}
-                  >
-                    <View style={[styles.customToggleCircle, isSleepDaily && styles.customToggleCircleActive, { width: 28, height: 28, borderRadius: 14 }]} />
-                  </TouchableOpacity>
-                </View>
-
-                <TouchableOpacity style={[styles.saveExerciseBtn, { marginTop: 10 }]} onPress={logSleep}>
-                  <Text style={styles.saveExerciseBtnText}>Save Sleep</Text>
-                </TouchableOpacity>
-
-                {activity.sleepHours ? (
-                  <View style={{ marginTop: 20, paddingTop: 15, borderTopWidth: 1, borderColor: '#eee' }}>
-                    <Text style={{ color: '#888', textAlign: 'center', fontWeight: '500' }}>
-                      Logged for today: {activity.sleepHours}h {activity.sleepQuality && `(${activity.sleepQuality})`}
+                {/* Right side - Progress bar */}
+                <View style={{ alignItems: 'center', width: 120 }}>
+                  <View style={{ backgroundColor: '#483D8B', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, marginBottom: 8, position: 'relative' }}>
+                    <Text style={{ color: '#FFF', fontSize: 12, fontWeight: 'bold' }}>
+                      {activity.sleepHours !== undefined ? `${activity.sleepHours}h` : '0h'}
                     </Text>
+                    {/* Tooltip triangle */}
+                    <View style={{ position: 'absolute', bottom: -5, left: '50%', marginLeft: -5, width: 0, height: 0, borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 5, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: '#483D8B' }} />
                   </View>
-                ) : null}
+                  <View style={{ width: '100%', height: 10, backgroundColor: '#444', borderRadius: 5, overflow: 'hidden' }}>
+                    <View style={{ width: `${Math.min(100, ((activity.sleepHours || 0) / 8) * 100)}%`, height: '100%', backgroundColor: '#6495ED' }} />
+                  </View>
+                </View>
               </View>
 
               {/* EXERCISE CARD */}
               <View style={styles.card}>
                 <View style={styles.cardHeader}>
                   <Text style={styles.cardTitle}>My Exercises</Text>
-                  <TouchableOpacity style={styles.logBtnSmall} onPress={() => { setIsLogModalVisible(true); fetchExerciseLibrary(); }}>
-                    <Text style={styles.logBtnSmallText}>＋ Add</Text>
-                  </TouchableOpacity>
+                  {isTodaySelected && (
+                    <TouchableOpacity style={styles.logBtnSmall} onPress={() => { setIsLogModalVisible(true); fetchExerciseLibrary(); }}>
+                      <Text style={styles.logBtnSmallText}>＋ Add</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
 
                 {activity.exercises.length === 0 ? (
                   <View style={styles.emptyActivity}>
-                    <Text style={styles.emptyActivityText}>No exercises logged yet.</Text>
+                    <Text style={styles.emptyActivityText}>{isTodaySelected ? 'No exercises logged yet.' : 'No activity recorded for this day'}</Text>
                   </View>
                 ) : (
                   activity.exercises.map((ex) => (
@@ -920,13 +1097,15 @@ export default function DashboardScreen() {
                       <View style={styles.exerciseInfo}>
                         <View style={styles.rowCentered}>
                           <Text style={styles.exerciseName}>{ex.name}</Text>
-                          {ex.isRoutine && <Text style={styles.routineBadge}>🔁</Text>}
+                          {(ex.isRoutine || ex.fromRoutine) && <Text style={[styles.routineBadge, { color: '#666', marginLeft: 6 }]}>🔄</Text>}
                         </View>
                         <Text style={styles.exerciseMeta}>{ex.duration} min {ex.sets ? `• ${ex.sets} sets` : ''} • {ex.caloriesBurnt} kcal</Text>
                       </View>
-                      <TouchableOpacity onPress={() => deleteExercise(ex._id)} style={{ padding: 10 }}>
-                        <Text style={{ fontSize: 20 }}>🗑️</Text>
-                      </TouchableOpacity>
+                      {isTodaySelected && (
+                        <TouchableOpacity onPress={() => deleteExercise(ex._id)} style={{ padding: 10 }}>
+                          <Text style={{ fontSize: 20 }}>🗑️</Text>
+                        </TouchableOpacity>
+                      )}
                     </View>
                   ))
                 )}
@@ -935,20 +1114,35 @@ export default function DashboardScreen() {
               {/* MY ROUTINE CARD */}
               <View style={styles.card}>
                 <Text style={styles.cardTitle}>Daily Routine</Text>
-                {routines.length > 0 ? routines.map((r) => (
-                  <View key={r._id} style={styles.routineItem}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.routineName}>{r.exerciseName}</Text>
-                      <View style={styles.rowCentered}>
-                        <Text style={styles.routineDays}>{r.days.join(', ').toUpperCase()}</Text>
-                        <Text style={[styles.routineMeta, { marginLeft: 10 }]}>{r.duration} min {r.sets ? `• ${r.sets} sets` : ''}</Text>
-                      </View>
+                {routines.length > 0 ? (
+                  <>
+                    {routines.map((r) => {
+                      const kcal = Math.round(r.met * userWeight * (r.duration / 60));
+                      return (
+                        <View key={r._id} style={styles.routineItem}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.routineName}>{r.exerciseName}</Text>
+                            <View style={styles.rowCentered}>
+                              <Text style={styles.routineDays}>{r.days.join(', ').toUpperCase()}</Text>
+                              <Text style={[styles.routineMeta, { marginLeft: 10 }]}>{r.duration} min {r.sets ? `• ${r.sets} sets` : ''}</Text>
+                            </View>
+                            <Text style={{ color: '#FF6B00', fontSize: 11, marginTop: 4, fontWeight: '600' }}>+{kcal} kcal burn</Text>
+                          </View>
+                          {isTodaySelected && (
+                            <TouchableOpacity onPress={() => deleteRoutine(r._id)} style={{ padding: 10 }}>
+                              <Text style={{ fontSize: 20 }}>🗑️</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      );
+                    })}
+                    <View style={{ marginTop: 15, paddingTop: 15, borderTopWidth: 1, borderColor: '#FAFAFA' }}>
+                      <Text style={{ color: '#555', fontSize: 13, fontWeight: '700', textAlign: 'right' }}>
+                        Total routine burn: {routines.reduce((sum, r) => sum + Math.round(r.met * userWeight * (r.duration / 60)), 0)} kcal/day
+                      </Text>
                     </View>
-                    <TouchableOpacity onPress={() => deleteRoutine(r._id)} style={{ padding: 10 }}>
-                      <Text style={{ fontSize: 20 }}>🗑️</Text>
-                    </TouchableOpacity>
-                  </View>
-                )) : (
+                  </>
+                ) : (
                   <Text style={styles.emptyRoutinesText}>Add recurring exercises to see them here.</Text>
                 )}
               </View>
@@ -1114,76 +1308,81 @@ export default function DashboardScreen() {
         </View>
       </Modal>
 
-      {/* TIME PICKERS */}
-      {showBedPicker && (
-        Platform.OS === 'ios' ? (
-          <Modal visible={showBedPicker} transparent animationType="fade">
-            <View style={styles.modalOverlay}>
-              <View style={[styles.modalContent, { maxHeight: 350, paddingBottom: 30 }]}>
-                <View style={styles.modalHeader}>
-                  <Text style={styles.modalTitle}>Select Bedtime</Text>
-                  <TouchableOpacity onPress={() => setShowBedPicker(false)}>
-                    <Text style={styles.closeModalText}>✕</Text>
-                  </TouchableOpacity>
-                </View>
-                <DateTimePicker
-                  value={tempBedtime}
-                  mode="time"
-                  display="spinner"
-                  onChange={(_, d) => d && setTempBedtime(d)}
-                />
-                <TouchableOpacity style={[styles.saveExerciseBtn, { marginTop: 10 }]} onPress={() => setShowBedPicker(false)}>
-                  <Text style={styles.saveExerciseBtnText}>Done</Text>
-                </TouchableOpacity>
-              </View>
+      {/* SLEEP DRAWER MODAL */}
+      <Modal visible={showSleepDrawer} animationType="slide" transparent>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' }}>
+          <View style={{ backgroundColor: '#1C1C1E', height: '80%', borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 20 }}>
+            {/* Pill */}
+            <View style={{ width: 60, height: 6, backgroundColor: '#444', borderRadius: 3, alignSelf: 'center', marginBottom: 20 }} />
+            <View style={{ backgroundColor: '#333', alignSelf: 'center', paddingHorizontal: 20, paddingVertical: 6, borderRadius: 20, marginBottom: 30 }}>
+              <Text style={{ color: '#FFF', fontWeight: 'bold' }}>Today</Text>
             </View>
-          </Modal>
-        ) : (
-          <DateTimePicker
-            value={tempBedtime}
-            mode="time"
-            onChange={(_, d) => {
-              setShowBedPicker(false);
-              if (d) setTempBedtime(d);
-            }}
-          />
-        )
-      )}
 
-      {showWakePicker && (
-        Platform.OS === 'ios' ? (
-          <Modal visible={showWakePicker} transparent animationType="fade">
-            <View style={styles.modalOverlay}>
-              <View style={[styles.modalContent, { maxHeight: 350, paddingBottom: 30 }]}>
-                <View style={styles.modalHeader}>
-                  <Text style={styles.modalTitle}>Select Wake Time</Text>
-                  <TouchableOpacity onPress={() => setShowWakePicker(false)}>
-                    <Text style={styles.closeModalText}>✕</Text>
-                  </TouchableOpacity>
-                </View>
-                <DateTimePicker
-                  value={tempWakeTime}
-                  mode="time"
-                  display="spinner"
-                  onChange={(_, d) => d && setTempWakeTime(d)}
-                />
-                <TouchableOpacity style={[styles.saveExerciseBtn, { marginTop: 10 }]} onPress={() => setShowWakePicker(false)}>
-                  <Text style={styles.saveExerciseBtnText}>Done</Text>
-                </TouchableOpacity>
+            {/* CLOCK DIAL */}
+            <View style={{ alignSelf: 'center', width: 300, height: 300 }} {...clockPanResponder.panHandlers}>
+              <Svg width="300" height="300">
+                {/* Background Ring */}
+                <Circle cx="150" cy="150" r="120" stroke="#333" strokeWidth="30" fill="none" />
+
+                {/* Orange Arc */}
+                <Path d={getArcPath(150, 150, 120, bedAngle, wakeAngle)} stroke="#FF6B00" strokeWidth="30" fill="none" strokeLinecap="round" />
+
+                {/* Ticks & Numbers */}
+                {[0, 6, 12, 18].map(h => {
+                  let a = (h / 24) * 360;
+                  // Inner ticks
+                  let tPos = polarToCartesian(150, 150, 95, a);
+                  let lPos = polarToCartesian(150, 150, 75, a);
+                  return (
+                    <G key={h}>
+                      <Circle cx={tPos.x} cy={tPos.y} r="2" fill="#888" />
+                      <SvgText x={lPos.x} y={lPos.y + 4} fill="#888" fontSize="12" fontWeight="bold" textAnchor="middle">{h}</SvgText>
+                    </G>
+                  );
+                })}
+
+                {/* Handles */}
+                {(() => {
+                  const bPos = polarToCartesian(150, 150, 120, bedAngle);
+                  const wPos = polarToCartesian(150, 150, 120, wakeAngle);
+                  return (
+                    <>
+                      <Circle cx={bPos.x} cy={bPos.y} r="18" fill="#FFF" />
+                      <SvgText x={bPos.x} y={bPos.y + 5} fontSize="16" textAnchor="middle">🛏️</SvgText>
+
+                      <Circle cx={wPos.x} cy={wPos.y} r="18" fill="#FFF" />
+                      <SvgText x={wPos.x} y={wPos.y + 5} fontSize="16" textAnchor="middle">⏰</SvgText>
+                    </>
+                  );
+                })()}
+              </Svg>
+
+              {/* Center Text */}
+              <View style={{ position: 'absolute', top: 0, left: 0, width: 300, height: 300, alignItems: 'center', justifyContent: 'center' }} pointerEvents="none">
+                <Text style={{ color: '#FFF', fontSize: 16, fontWeight: 'bold', marginBottom: 5 }}>🛏️ {formatTime(bedTimeData.h, bedTimeData.m)}</Text>
+                <Text style={{ color: '#FFF', fontSize: 16, fontWeight: 'bold' }}>⏰ {formatTime(wakeTimeData.h, wakeTimeData.m)}</Text>
               </View>
             </View>
-          </Modal>
-        ) : (
-          <DateTimePicker
-            value={tempWakeTime}
-            mode="time"
-            onChange={(_, d) => {
-              setShowWakePicker(false);
-              if (d) setTempWakeTime(d);
-            }}
-          />
-        )
-      )}
+
+            {/* Total Sleep Time */}
+            <View style={{ alignItems: 'center', marginTop: 30 }}>
+              <Text style={{ color: '#FF6B00', fontSize: 18, fontWeight: '600' }}>
+                Sleep time: {sleepHrs} hours {sleepM} minutes
+              </Text>
+            </View>
+
+            {/* Bottom Buttons */}
+            <View style={{ flexDirection: 'row', marginTop: 'auto', marginBottom: 20 }}>
+              <TouchableOpacity style={{ flex: 1, backgroundColor: '#333', padding: 18, borderRadius: 16, alignItems: 'center', marginRight: 10 }} onPress={() => setShowSleepDrawer(false)}>
+                <Text style={{ color: '#FFF', fontWeight: 'bold', fontSize: 16 }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={{ flex: 1, backgroundColor: '#FF6B00', padding: 18, borderRadius: 16, alignItems: 'center' }} onPress={saveNewSleep}>
+                <Text style={{ color: '#FFF', fontWeight: 'bold', fontSize: 16 }}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1202,7 +1401,39 @@ const styles = StyleSheet.create({
   toggleBtnActive: { backgroundColor: '#fff', shadowColor: '#000', shadowOpacity: 0.1, shadowOffset: { width: 0, height: 2 }, shadowRadius: 4, elevation: 2 },
   toggleText: { fontSize: 14, fontWeight: '600', color: '#888' },
   toggleTextActive: { color: '#333' },
-  bellIcon: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
+  bellIcon: {
+    padding: 8,
+    backgroundColor: '#FFF',
+    borderRadius: 20,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 2 },
+    position: 'relative',
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  badgeContainer: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: '#FF8C00',
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+    borderWidth: 1.5,
+    borderColor: '#F5F0E8',
+  },
+  badgeText: {
+    color: '#FFF',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
 
   // CALENDAR
   calendarRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },

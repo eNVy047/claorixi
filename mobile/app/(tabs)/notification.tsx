@@ -1,21 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  TouchableOpacity, 
-  FlatList, 
-  ActivityIndicator, 
-  RefreshControl,
-  Platform,
-  Alert
+  View, Text, StyleSheet, TouchableOpacity, FlatList, 
+  ActivityIndicator, RefreshControl, Platform, Alert, Animated
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { api } from '../../lib/api';
-import { formatDistanceToNow } from 'date-fns';
+import { formatDistanceToNow, isToday, isYesterday, isThisWeek, parseISO } from 'date-fns';
+import { useNotifications } from '../../context/NotificationContext';
+import { Swipeable } from 'react-native-gesture-handler';
 
-type NotificationType = 'meal' | 'water' | 'activity' | 'achievement' | 'report';
+type NotificationType = 'meal' | 'water' | 'activity' | 'sleep' | 'streak' | 'subscription' | 'admin' | 'achievement' | 'report' | 'reminder' | 'promo' | 'general';
 
 interface Notification {
   _id: string;
@@ -28,12 +23,25 @@ interface Notification {
 
 const NotificationScreen = () => {
   const router = useRouter();
+  const { decrementUnreadCount, clearUnreadCount } = useNotifications();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeFilter, setActiveFilter] = useState('All');
 
-  const filters = ['All', 'Meals', 'Activity', 'Water', 'System'];
+  const filters = ['All', 'Meals', 'Water', 'Activity', 'Sleep', 'Subscription', 'Admin'];
+
+  const mapFilterToTypes = (filter: string): NotificationType[] => {
+    switch (filter) {
+      case 'Meals': return ['meal'];
+      case 'Water': return ['water'];
+      case 'Activity': return ['activity'];
+      case 'Sleep': return ['sleep'];
+      case 'Subscription': return ['subscription'];
+      case 'Admin': return ['admin'];
+      default: return []; // All
+    }
+  };
 
   const fetchNotifications = async () => {
     try {
@@ -60,8 +68,10 @@ const NotificationScreen = () => {
 
   const markAllRead = async () => {
     try {
+      // Optimistic Update
+      setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+      clearUnreadCount();
       await api.patch('/api/v1/notifications/read-all');
-      setNotifications(notifications.map(n => ({ ...n, isRead: true })));
     } catch (error) {
       Alert.alert('Error', 'Could not mark all as read');
     }
@@ -69,17 +79,25 @@ const NotificationScreen = () => {
 
   const deleteNotification = async (id: string) => {
     try {
+      // Optimistic Update
+      const notifToDelete = notifications.find(n => n._id === id);
+      setNotifications(prev => prev.filter(n => n._id !== id));
+      if (notifToDelete && !notifToDelete.isRead) {
+        decrementUnreadCount();
+      }
       await api.delete(`/api/v1/notifications/${id}`);
-      setNotifications(notifications.filter(n => n._id !== id));
     } catch (error) {
       Alert.alert('Error', 'Could not delete notification');
     }
   };
 
-  const markRead = async (id: string) => {
+  const markRead = async (id: string, currentlyRead: boolean) => {
+    if (currentlyRead) return;
     try {
+      // Optimistic
+      setNotifications(prev => prev.map(n => n._id === id ? { ...n, isRead: true } : n));
+      decrementUnreadCount();
       await api.patch(`/api/v1/notifications/${id}/read`);
-      setNotifications(notifications.map(n => n._id === id ? { ...n, isRead: true } : n));
     } catch (error) {
       // Silent error
     }
@@ -87,54 +105,88 @@ const NotificationScreen = () => {
 
   const getTypeIcon = (type: NotificationType) => {
     switch (type) {
-      case 'meal': return { emoji: '🍽️', color: '#FF8C00' };
-      case 'water': return { emoji: '💧', color: '#007AFF' };
-      case 'activity': return { emoji: '🏃', color: '#4CD964' };
-      case 'achievement': return { emoji: '🏆', color: '#FFD700' };
-      case 'report': return { emoji: '⚖️', color: '#5856D6' };
-      default: return { emoji: '🔔', color: '#8E8E93' };
+      case 'meal': return { emoji: '🍳' };
+      case 'water': return { emoji: '💧' };
+      case 'activity': return { emoji: '🏃' };
+      case 'sleep': return { emoji: '🌙' };
+      case 'streak': return { emoji: '🔥' };
+      case 'subscription': return { emoji: '⏰' };
+      case 'admin': return { emoji: '📢' };
+      default: return { emoji: '🔔' }; // general, report, achievement etc
     }
   };
 
-  const filteredNotifications = notifications.filter(n => {
-    if (activeFilter === 'All') return true;
-    if (activeFilter === 'Meals') return n.type === 'meal';
-    if (activeFilter === 'Activity') return n.type === 'activity';
-    if (activeFilter === 'Water') return n.type === 'water';
-    if (activeFilter === 'System') return n.type === 'achievement' || n.type === 'report';
-    return true;
-  });
+  const filteredNotifications = useMemo(() => {
+    if (activeFilter === 'All') return notifications;
+    const allowedTypes = mapFilterToTypes(activeFilter);
+    return notifications.filter(n => allowedTypes.includes(n.type));
+  }, [notifications, activeFilter]);
 
-  const renderNotification = ({ item }: { item: Notification }) => {
-    const { emoji, color } = getTypeIcon(item.type);
+  const groupedNotifications = useMemo(() => {
+    const groups = [
+      { title: 'Today', data: [] as Notification[] },
+      { title: 'Yesterday', data: [] as Notification[] },
+      { title: 'This Week', data: [] as Notification[] },
+      { title: 'Earlier', data: [] as Notification[] },
+    ];
+
+    filteredNotifications.forEach(n => {
+      const date = parseISO(n.createdAt);
+      if (isToday(date)) groups[0].data.push(n);
+      else if (isYesterday(date)) groups[1].data.push(n);
+      else if (isThisWeek(date)) groups[2].data.push(n);
+      else groups[3].data.push(n);
+    });
+
+    return groups.filter(g => g.data.length > 0);
+  }, [filteredNotifications]);
+
+  const hasUnread = notifications.some(n => !n.isRead);
+
+  // Render individual card
+  const renderCard = (item: Notification) => {
+    const { emoji } = getTypeIcon(item.type);
+    
+    const renderRightActions = (progress: any, dragX: any) => {
+      const trans = dragX.interpolate({
+        inputRange: [-80, 0],
+        outputRange: [1, 0],
+        extrapolate: 'clamp',
+      });
+      return (
+        <TouchableOpacity style={styles.deleteBtnWrapper} onPress={() => deleteNotification(item._id)}>
+          <Animated.View style={[styles.deleteBtnAction, { opacity: trans }]}>
+            <Ionicons name="trash" size={24} color="#FFF" />
+          </Animated.View>
+        </TouchableOpacity>
+      );
+    };
 
     return (
-      <TouchableOpacity 
-        style={[styles.notificationCard, !item.isRead && styles.unreadCard]}
-        onPress={() => markRead(item._id)}
-        activeOpacity={0.7}
-      >
-        <View style={styles.cardHeader}>
-          <View style={[styles.iconContainer, { backgroundColor: color + '20' }]}>
-            <Text style={styles.emoji}>{emoji}</Text>
-          </View>
-          <View style={styles.contentContainer}>
-            <View style={styles.titleRow}>
-              <Text style={[styles.title, !item.isRead && styles.boldText]}>{item.title}</Text>
-              {!item.isRead && <View style={styles.unreadDot} />}
+      <Swipeable renderRightActions={renderRightActions}>
+        <TouchableOpacity 
+          style={[styles.notificationCard, !item.isRead ? styles.cardUnread : styles.cardRead]}
+          onPress={() => markRead(item._id, item.isRead)}
+          activeOpacity={0.8}
+        >
+          <View style={styles.cardHeader}>
+            {!item.isRead && <View style={styles.unreadDotIndicator} />}
+            <Text style={styles.emojiIcon}>{emoji}</Text>
+            
+            <View style={styles.contentContainer}>
+              <View style={styles.titleRow}>
+                <Text style={[styles.title, !item.isRead && styles.boldText]} numberOfLines={1}>{item.title}</Text>
+                <Text style={styles.time}>{formatDistanceToNow(parseISO(item.createdAt), { addSuffix: true })}</Text>
+              </View>
+              <Text style={styles.message} numberOfLines={2}>{item.message}</Text>
             </View>
-            <Text style={styles.message} numberOfLines={2}>{item.message}</Text>
-            <Text style={styles.time}>{formatDistanceToNow(new Date(item.createdAt), { addSuffix: true })}</Text>
           </View>
-          <TouchableOpacity onPress={() => deleteNotification(item._id)} style={styles.deleteBtn}>
-            <Ionicons name="trash-outline" size={20} color="#FF3B30" />
-          </TouchableOpacity>
-        </View>
-      </TouchableOpacity>
+        </TouchableOpacity>
+      </Swipeable>
     );
   };
 
-  if (loading) {
+  if (loading && notifications.length === 0) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#FF8C00" />
@@ -146,13 +198,17 @@ const NotificationScreen = () => {
     <View style={styles.container}>
       {/* HEADER */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={24} color="#333" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Notifications</Text>
-        <TouchableOpacity onPress={markAllRead}>
-          <Text style={styles.markReadText}>Mark all read</Text>
-        </TouchableOpacity>
+        <View style={styles.headerLeft}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+            <Ionicons name="arrow-back" size={24} color="#333" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Notifications</Text>
+        </View>
+        {hasUnread && (
+          <TouchableOpacity onPress={markAllRead}>
+            <Text style={styles.markReadText}>Mark all as read</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* FILTER CHIPS */}
@@ -177,20 +233,30 @@ const NotificationScreen = () => {
       </View>
 
       {/* LIST */}
-      <FlatList
-        data={filteredNotifications}
-        renderItem={renderNotification}
-        keyExtractor={item => item._id}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        contentContainerStyle={styles.listContainer}
-        ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Ionicons name="notifications-off-outline" size={64} color="#CCC" />
-            <Text style={styles.emptyTitle}>You're all caught up!</Text>
-            <Text style={styles.emptySub}>No new notifications at the moment.</Text>
-          </View>
-        }
-      />
+      {groupedNotifications.length === 0 ? (
+        <View style={styles.emptyState}>
+          <Ionicons name="notifications-off-outline" size={64} color="#CCCCCC" />
+          <Text style={styles.emptyTitle}>You're all caught up! 🎉</Text>
+          <Text style={styles.emptySub}>No new notifications at the moment.</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={groupedNotifications}
+          keyExtractor={(item) => item.title}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          contentContainerStyle={styles.listContainer}
+          renderItem={({ item }) => (
+            <View style={styles.groupContainer}>
+              <Text style={styles.groupTitle}>{item.title}</Text>
+              {item.data.map(notif => (
+                <View key={notif._id}>
+                  {renderCard(notif)}
+                </View>
+              ))}
+            </View>
+          )}
+        />
+      )}
     </View>
   );
 };
@@ -198,13 +264,13 @@ const NotificationScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F5F0E8',
+    backgroundColor: '#F7F4F0',
   },
   center: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#F5F0E8',
+    backgroundColor: '#F7F4F0',
   },
   header: {
     flexDirection: 'row',
@@ -212,10 +278,17 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingTop: Platform.OS === 'ios' ? 60 : 40,
     paddingHorizontal: 20,
-    paddingBottom: 20,
-    backgroundColor: '#F5F0E8',
+    paddingBottom: 15,
+    backgroundColor: '#FFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   backBtn: {
+    marginRight: 10,
     padding: 4,
   },
   headerTitle: {
@@ -229,26 +302,26 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   filterContainer: {
+    backgroundColor: '#FFF',
     paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0EBE0',
   },
   filterList: {
     paddingHorizontal: 20,
   },
   filterChip: {
-    paddingHorizontal: 20,
-    paddingVertical: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
     borderRadius: 20,
-    backgroundColor: '#FFF',
+    backgroundColor: '#F0F0F0',
     marginRight: 10,
-    borderWidth: 1,
-    borderColor: '#EFEFEF',
   },
   activeChip: {
     backgroundColor: '#FF8C00',
-    borderColor: '#FF8C00',
   },
   filterText: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#666',
     fontWeight: '600',
   },
@@ -259,36 +332,46 @@ const styles = StyleSheet.create({
     padding: 20,
     paddingBottom: 40,
   },
+  groupContainer: {
+    marginBottom: 20,
+  },
+  groupTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#888',
+    marginBottom: 10,
+  },
   notificationCard: {
-    backgroundColor: '#FFF',
     borderRadius: 16,
-    padding: 16,
-    marginBottom: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    marginBottom: 10,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
-    shadowRadius: 8,
+    shadowRadius: 3,
     elevation: 2,
   },
-  unreadCard: {
-    backgroundColor: '#FFFBF5',
-    borderColor: '#FFE4C4',
-    borderWidth: 1,
+  cardUnread: {
+    backgroundColor: '#F0EBE0',
+  },
+  cardRead: {
+    backgroundColor: '#FFF',
   },
   cardHeader: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-  },
-  iconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
-    justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 16,
   },
-  emoji: {
+  unreadDotIndicator: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#FF8C00',
+    marginRight: 8,
+  },
+  emojiIcon: {
     fontSize: 24,
+    marginRight: 12,
   },
   contentContainer: {
     flex: 1,
@@ -300,32 +383,36 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   title: {
-    fontSize: 16,
+    fontSize: 15,
     color: '#333',
     flex: 1,
+    marginRight: 10,
   },
   boldText: {
     fontWeight: 'bold',
-  },
-  unreadDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#FF8C00',
-    marginLeft: 8,
   },
   message: {
     fontSize: 14,
     color: '#666',
     lineHeight: 20,
-    marginBottom: 8,
   },
   time: {
     fontSize: 12,
     color: '#999',
   },
-  deleteBtn: {
-    padding: 8,
+  deleteBtnWrapper: {
+    backgroundColor: '#FF3B30',
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+    borderRadius: 16,
+    marginBottom: 10,
+    width: 80,
+  },
+  deleteBtnAction: {
+    width: 80,
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   emptyState: {
     alignItems: 'center',
@@ -340,7 +427,7 @@ const styles = StyleSheet.create({
   },
   emptySub: {
     fontSize: 14,
-    color: '#666',
+    color: '#888',
     marginTop: 8,
   },
 });

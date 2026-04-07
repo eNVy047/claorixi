@@ -1,8 +1,15 @@
 import React from 'react';
 import { View, ActivityIndicator, StyleSheet, Text } from 'react-native';
 import { Stack } from 'expo-router';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AuthProvider, useAuth } from '../context/AuthContext';
 import { GoalProvider } from '../context/GoalContext';
+import { NotificationProvider } from '../context/NotificationContext';
+import { registerStepBackgroundSync } from '../lib/stepsBackground';
+import PaywallPopup from '../components/PaywallPopup';
+
+import { registerForPushNotificationsAsync, syncPushToken } from '../lib/notifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Splash/Loading screen shown while token is being verified
 function SplashScreen() {
@@ -16,23 +23,66 @@ function SplashScreen() {
 
 // Inner layout that can use the AuthContext
 function RootLayoutInner() {
-  const { isLoading } = useAuth();
+  const { isLoading, user, logout } = useAuth();
+  const [popupVisible, setPopupVisible] = React.useState(false);
+
+  React.useEffect(() => {
+    registerStepBackgroundSync().catch(() => {
+      // Best-effort; background fetch availability varies by platform/settings.
+    });
+  }, []);
+
+  React.useEffect(() => {
+    async function setupNotifications() {
+      if (user) {
+        const token = await registerForPushNotificationsAsync();
+        const userToken = await AsyncStorage.getItem('authToken');
+        if (token && userToken) {
+          await syncPushToken(token, userToken);
+        }
+      }
+    }
+    setupNotifications();
+  }, [user]);
+
+  React.useEffect(() => {
+    if (user && (user.subscriptionStatus === 'expired' ||
+      (user.subscriptionStatus === 'none' && user.subscriptionEndDate && new Date(user.subscriptionEndDate) < new Date()))) {
+      setPopupVisible(true);
+    } else {
+      setPopupVisible(false);
+    }
+  }, [user]);
 
   if (isLoading) {
     return <SplashScreen />;
   }
 
-  return <Stack screenOptions={{ headerShown: false }} />;
+  return (
+    <>
+      <Stack screenOptions={{ headerShown: false }} />
+      <PaywallPopup
+        visible={popupVisible}
+        onSuccess={() => setPopupVisible(false)}
+        onLogout={logout}
+      />
+    </>
+  );
 }
+
 
 // Root layout wraps everything in AuthProvider
 export default function RootLayout() {
   return (
-    <AuthProvider>
-      <GoalProvider>
-        <RootLayoutInner />
-      </GoalProvider>
-    </AuthProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <AuthProvider>
+        <GoalProvider>
+          <NotificationProvider>
+            <RootLayoutInner />
+          </NotificationProvider>
+        </GoalProvider>
+      </AuthProvider>
+    </GestureHandlerRootView>
   );
 }
 

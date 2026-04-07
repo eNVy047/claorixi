@@ -15,6 +15,8 @@ export type AuthUser = {
   id: string;
   email: string;
   subscriptionTier: string;
+  subscriptionStatus: 'trial' | 'active' | 'expired' | 'none';
+  subscriptionEndDate?: string;
 };
 
 type AuthContextType = {
@@ -23,6 +25,7 @@ type AuthContextType = {
   isAuthenticated: boolean;
   login: (token: string, user: AuthUser) => Promise<void>;
   logout: () => Promise<void>;
+  refreshUser: () => Promise<void>;
 };
 
 // ─── Context ──────────────────────────────────────────────────────────────────
@@ -104,6 +107,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     router.replace('/(auth)/sign-in');
   }, [router]);
 
+  const refreshUser = useCallback(async () => {
+    try {
+      const response = await api.get('/api/v1/auth/verify');
+      if (response.data.success) {
+        setUser(response.data.data.user);
+      }
+    } catch (error) {
+      console.error('Failed to refresh user:', error);
+    }
+  }, []);
+
   return (
     <AuthContext.Provider
       value={{
@@ -112,12 +126,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isAuthenticated: !!user,
         login,
         logout,
+        refreshUser,
       }}
     >
       {children}
     </AuthContext.Provider>
   );
 }
+
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 

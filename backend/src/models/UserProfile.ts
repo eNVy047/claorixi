@@ -1,5 +1,16 @@
 import { Schema, model, Document, Types } from 'mongoose';
 
+export interface IUserGoals {
+  calorieGoal: number;
+  proteinGoal: number;
+  carbsGoal: number;
+  fatGoal: number;
+  waterGlasses: number;
+  stepGoal: number;
+  caloriesBurntGoal: number;
+  sleepGoal: number;
+}
+
 export interface IUserProfile extends Document {
   userId: Types.ObjectId;
   age: number;
@@ -11,6 +22,10 @@ export interface IUserProfile extends Document {
   dietPreference: 'veg' | 'non_veg' | 'vegan';
   bmi: number;
   dailyCalories: number; // TDEE (Total Daily Energy Expenditure) based on Goal
+  targetWeight?: number;
+  workoutTimePreference: 'morning' | 'afternoon' | 'evening' | 'night' | 'flexible';
+  goals?: IUserGoals;
+  pushToken?: string;
   profileImage?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -40,6 +55,23 @@ const userProfileSchema = new Schema<IUserProfile>(
     },
     bmi: { type: Number, required: true },
     dailyCalories: { type: Number, required: true },
+    targetWeight: { type: Number },
+    workoutTimePreference: { 
+      type: String, 
+      enum: ['morning', 'afternoon', 'evening', 'night', 'flexible'],
+      default: 'flexible'
+    },
+    goals: {
+      calorieGoal: { type: Number },
+      proteinGoal: { type: Number },
+      carbsGoal: { type: Number },
+      fatGoal: { type: Number },
+      waterGlasses: { type: Number },
+      stepGoal: { type: Number },
+      caloriesBurntGoal: { type: Number },
+      sleepGoal: { type: Number },
+    },
+    pushToken: { type: String },
     profileImage: { type: String },
   },
   {

@@ -48,13 +48,14 @@ export class ProfileController {
       if (!profile) {
         return reply.status(404).send({ success: false, message: 'Profile not found. Please setup profile first.' });
       }
-      const goals = ProfileService.calculateGoals({
+      const goals = profile.goals || ProfileService.calculateGoals({
         age: profile.age,
         gender: profile.gender,
         weightKg: profile.weightKg,
         heightCm: profile.heightCm,
         activityLevel: profile.activityLevel,
         fitnessGoal: profile.fitnessGoal,
+        targetWeight: profile.targetWeight,
       });
       return sendSuccess(reply, goals, 'Goals fetched successfully');
     } catch (error) {
@@ -68,7 +69,7 @@ export class ProfileController {
       const userId = (request.user as any).id;
       const parsedData = profileUpdateSchema.parse(request.body);
       const data = await ProfileService.updateProfile(userId, parsedData);
-      return sendSuccess(reply, data, 'Profile updated successfully');
+      return sendSuccess(reply, { ...data, goals: data.profile.goals }, 'Profile updated successfully');
     } catch (error) {
       logger.error({ err: error, user: request.user }, 'Error PUT profile');
       throw error;

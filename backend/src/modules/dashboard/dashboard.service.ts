@@ -4,6 +4,7 @@ import { ProfileService } from '../profile/profile.service';
 import { NotFoundError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { format, startOfWeek, endOfWeek, eachDayOfInterval } from 'date-fns';
+import { NotificationService } from '../notifications/notification.service';
 
 function todayString(): string {
   return format(new Date(), 'yyyy-MM-dd');
@@ -19,13 +20,14 @@ export class DashboardService {
       throw new NotFoundError('User profile not found. Please complete profile setup.');
     }
 
-    const goals = ProfileService.calculateGoals({
+    const goals = profile.goals || ProfileService.calculateGoals({
       age: profile.age,
       gender: profile.gender,
       weightKg: profile.weightKg,
       heightCm: profile.heightCm,
       activityLevel: profile.activityLevel,
       fitnessGoal: profile.fitnessGoal,
+      targetWeight: profile.targetWeight,
     });
 
     const log = new DailyLog({
@@ -65,6 +67,26 @@ export class DashboardService {
     let log: any = await DailyLog.findOne({ userId, date: today });
     if (!log) {
       log = await this.buildNewLog(userId, today);
+    } else if (log.calorieGoal === undefined) {
+      // Patch old documents that lack the required goal fields
+      const profile = await UserProfile.findOne({ userId });
+      if (profile) {
+        const goals = profile.goals || ProfileService.calculateGoals({
+          age: profile.age,
+          gender: profile.gender as any,
+          weightKg: profile.weightKg,
+          heightCm: profile.heightCm,
+          activityLevel: profile.activityLevel as any,
+          fitnessGoal: profile.fitnessGoal as any,
+          targetWeight: profile.targetWeight
+        });
+        log.calorieGoal = goals.calorieGoal;
+        log.proteinGoal = goals.proteinGoal;
+        log.carbsGoal = goals.carbsGoal;
+        log.fatGoal = goals.fatGoal;
+        log.waterGoal = goals.waterGlasses;
+        log.stepGoal = goals.stepGoal;
+      }
     }
     return log;
   }
@@ -77,29 +99,33 @@ export class DashboardService {
    */
   static async getDayLog(userId: string, date: string): Promise<any> {
     const today = todayString();
+    
+    // Allow up to 1 day in the future to account for timezones
+    const serverTomorrow = format(new Date(Date.now() + 24 * 60 * 60 * 1000), 'yyyy-MM-dd');
 
-    if (date > today) {
+    if (date > serverTomorrow) {
       throw new Error('Cannot fetch logs for future dates.');
     }
 
     let log: any = await DailyLog.findOne({ userId, date });
 
-    if (!log && date === today) {
-      log = await this.buildNewLog(userId, today);
+    if (!log && (date === today || date === serverTomorrow)) {
+      log = await this.buildNewLog(userId, date);
     }
 
     if (!log) {
       // Past date with no entry — return zeroed object with current goals as reference
       const profile = await UserProfile.findOne({ userId });
       const goals = profile
-        ? ProfileService.calculateGoals({
+        ? (profile.goals || ProfileService.calculateGoals({
             age: profile.age,
-            gender: profile.gender,
+            gender: profile.gender as any,
             weightKg: profile.weightKg,
             heightCm: profile.heightCm,
-            activityLevel: profile.activityLevel,
-            fitnessGoal: profile.fitnessGoal,
-          })
+            activityLevel: profile.activityLevel as any,
+            fitnessGoal: profile.fitnessGoal as any,
+            targetWeight: profile.targetWeight,
+          }))
         : { calorieGoal: 2000, proteinGoal: 150, carbsGoal: 200, fatGoal: 67, waterGlasses: 8, stepGoal: 10000, caloriesBurntGoal: 300, sleepGoal: 8 };
 
       return {
@@ -126,6 +152,26 @@ export class DashboardService {
           stepGoal: goals.stepGoal,
         },
       } as Partial<IDailyLog>;
+    } else if (log.calorieGoal === undefined) {
+      // Patch old documents that lack the required goal fields
+      const profile = await UserProfile.findOne({ userId });
+      if (profile) {
+        const goals = profile.goals || ProfileService.calculateGoals({
+          age: profile.age,
+          gender: profile.gender as any,
+          weightKg: profile.weightKg,
+          heightCm: profile.heightCm,
+          activityLevel: profile.activityLevel as any,
+          fitnessGoal: profile.fitnessGoal as any,
+          targetWeight: profile.targetWeight
+        });
+        log.calorieGoal = goals.calorieGoal;
+        log.proteinGoal = goals.proteinGoal;
+        log.carbsGoal = goals.carbsGoal;
+        log.fatGoal = goals.fatGoal;
+        log.waterGoal = goals.waterGlasses;
+        log.stepGoal = goals.stepGoal;
+      }
     }
 
     return log;
@@ -190,10 +236,21 @@ export class DashboardService {
   /**
    * Increments the water glasses count for today.
    */
-  static async addWaterGlass(userId: string): Promise<IDailyLog> {
-    const log = await this.getOrCreateTodayLog(userId);
+  static async addWaterGlass(userId: string, date?: string): Promise<IDailyLog> {
+    const log = await this.getDayLog(userId, date || todayString());
+    const before = log.waterGlasses;
     log.waterGlasses += 1;
     await log.save();
+    
+    if (log.waterGoal > 0 && before < log.waterGoal && log.waterGlasses >= log.waterGoal) {
+      await NotificationService.sendPushNotification(
+        userId, 
+        "Hydration Goal Met! 💧", 
+        `Great job drinking ${log.waterGoal} glasses of water today!`, 
+        { type: 'achievement' }
+      );
+    }
+    
     return log;
   }
 }

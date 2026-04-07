@@ -8,6 +8,9 @@ export const profileSetupSchema = z.object({
   fitnessGoal: z.enum(['lose_weight', 'build_muscle', 'stay_fit']),
   activityLevel: z.enum(['sedentary', 'light', 'moderate', 'active', 'very_active']),
   dietPreference: z.enum(['veg', 'non_veg', 'vegan']),
+  targetWeight: z.number().min(20, 'Target weight must be at least 20kg').max(500, 'Target weight must be less than 500kg').optional(),
+  workoutTimePreference: z.enum(['morning', 'afternoon', 'evening', 'night', 'flexible']).default('flexible'),
+  pushToken: z.string().optional(),
 });
 
 export type ProfileSetupInput = z.infer<typeof profileSetupSchema>;

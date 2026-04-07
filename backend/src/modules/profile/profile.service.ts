@@ -1,56 +1,15 @@
 import { UserProfile, IUserProfile } from '../../models/UserProfile';
 import { User } from '../../models/User';
+import { DailyLog } from '../../models/DailyLog';
 import { ProfileSetupInput, ProfileUpdateInput } from './profile.schema';
 import { ConflictError, NotFoundError } from '../../utils/errors';
+import * as GoalService from './goalService';
+import { format } from 'date-fns';
 
 export class ProfileService {
   /**
-   * Calculate BMI
-   */
-  static calculateBMI(weightKg: number, heightCm: number): number {
-    const heightM = heightCm / 100;
-    return Number((weightKg / (heightM * heightM)).toFixed(2));
-  }
-
-  /**
-   * Calculate Base BMR using Harris-Benedict Formula
-   */
-  static calculateBMR(age: number, gender: string, weightKg: number, heightCm: number): number {
-    if (gender === 'female') {
-      return 447.593 + (9.247 * weightKg) + (3.098 * heightCm) - (4.330 * age);
-    } 
-    // Default to male calculation for 'male' and 'other' for estimation
-    return 88.362 + (13.397 * weightKg) + (4.799 * heightCm) - (5.677 * age);
-  }
-
-  /**
-   * Calculate TDEE (Total Daily Energy Expenditure) 
-   * based on Activity Level & Fitness Goal
-   */
-  static calculateTDEE(bmr: number, activityLevel: string, fitnessGoal: string): number {
-    let activityMultiplier = 1.2; // sedentary
-
-    switch (activityLevel) {
-      case 'light': activityMultiplier = 1.375; break;
-      case 'moderate': activityMultiplier = 1.55; break;
-      case 'active': activityMultiplier = 1.725; break;
-      case 'very_active': activityMultiplier = 1.9; break;
-    }
-
-    const tdee = bmr * activityMultiplier;
-
-    // Adjust the daily calories based on the goal
-    switch (fitnessGoal) {
-      case 'lose_weight': return Math.round(tdee - 500); // Create deficit
-      case 'build_muscle': return Math.round(tdee + 300); // Create surplus
-      case 'stay_fit':
-      default:
-        return Math.round(tdee); // Maintenance
-    }
-  }
-
-  /**
-   * Calculate all dynamic user goals from profile
+   * (Legacy) Calculate all dynamic user goals from profile
+   * Redirects to GoalService
    */
   static calculateGoals(profile: {
     age: number;
@@ -59,46 +18,9 @@ export class ProfileService {
     heightCm: number;
     activityLevel: string;
     fitnessGoal: string;
+    targetWeight?: number | undefined;
   }) {
-    const bmr = this.calculateBMR(profile.age, profile.gender, profile.weightKg, profile.heightCm);
-    const calorieGoal = this.calculateTDEE(bmr, profile.activityLevel, profile.fitnessGoal);
-
-    // Macro split
-    const proteinGoal = Math.round((calorieGoal * 0.30) / 4);
-    const carbsGoal = Math.round((calorieGoal * 0.40) / 4);
-    const fatGoal = Math.round((calorieGoal * 0.30) / 9);
-
-    // Water
-    const waterGoalLiters = profile.weightKg * 0.033;
-    const waterGlasses = Math.round(waterGoalLiters / 0.25);
-
-    // Steps based on activity level
-    let stepGoal = 8000;
-    switch (profile.activityLevel) {
-      case 'light': stepGoal = 10000; break;
-      case 'moderate': stepGoal = 12000; break;
-      case 'active':
-      case 'very_active': stepGoal = 15000; break;
-    }
-
-    // Calorie burn goal: 15% of TDEE
-    const caloriesBurntGoal = Math.round(calorieGoal * 0.15);
-
-    // Sleep goal based on age
-    let sleepGoal = 8;
-    if (profile.age < 18) sleepGoal = 9;
-    else if (profile.age > 60) sleepGoal = 7;
-
-    return {
-      calorieGoal,
-      proteinGoal,
-      carbsGoal,
-      fatGoal,
-      waterGlasses,
-      stepGoal,
-      caloriesBurntGoal,
-      sleepGoal,
-    };
+    return GoalService.calculateGoals(profile);
   }
 
   static async setupProfile(userId: string, data: ProfileSetupInput): Promise<IUserProfile> {
@@ -115,16 +37,28 @@ export class ProfileService {
     }
 
     // 3. Compute derived values
-    const bmi = this.calculateBMI(data.weightKg, data.heightCm);
-    const bmr = this.calculateBMR(data.age, data.gender, data.weightKg, data.heightCm);
-    const dailyCalories = this.calculateTDEE(bmr, data.activityLevel, data.fitnessGoal);
+    const results = GoalService.calculateGoals({
+      age: data.age,
+      gender: data.gender,
+      weightKg: data.weightKg,
+      heightCm: data.heightCm,
+      activityLevel: data.activityLevel,
+      fitnessGoal: data.fitnessGoal,
+      targetWeight: data.targetWeight,
+    });
+
+    const { bmi, bmr, tdee, ...goals } = results;
 
     // 4. Create and save profile
+
     const profile = new UserProfile({
       userId,
       ...data,
       bmi,
-      dailyCalories,
+      dailyCalories: tdee,
+      targetWeight: data.targetWeight,
+      workoutTimePreference: data.workoutTimePreference || 'flexible',
+      goals,
     });
 
     await profile.save();
@@ -135,7 +69,7 @@ export class ProfileService {
     user.weightKg = data.weightKg;
     user.activityLevel = data.activityLevel;
     user.bmr = bmr;
-    user.tdee = dailyCalories;
+    user.tdee = tdee;
     await user.save();
 
     return profile;
@@ -175,15 +109,60 @@ export class ProfileService {
     if (data.fitnessGoal !== undefined) profile.fitnessGoal = data.fitnessGoal;
     if (data.activityLevel !== undefined) profile.activityLevel = data.activityLevel;
     if (data.dietPreference !== undefined) profile.dietPreference = data.dietPreference;
+    if (data.targetWeight !== undefined) profile.targetWeight = data.targetWeight;
+    if (data.workoutTimePreference !== undefined) profile.workoutTimePreference = data.workoutTimePreference;
+    if (data.pushToken !== undefined) profile.pushToken = data.pushToken;
 
     // Recalculate BMI & TDEE if physical stats changed
-    if (data.weightKg !== undefined || data.heightCm !== undefined || data.age !== undefined || data.gender !== undefined || data.activityLevel !== undefined || data.fitnessGoal !== undefined) {
-      profile.bmi = this.calculateBMI(profile.weightKg, profile.heightCm);
-      const bmr = this.calculateBMR(profile.age, profile.gender, profile.weightKg, profile.heightCm);
-      profile.dailyCalories = this.calculateTDEE(bmr, profile.activityLevel, profile.fitnessGoal);
-      
+    if (
+      data.weightKg !== undefined ||
+      data.heightCm !== undefined ||
+      data.age !== undefined ||
+      data.gender !== undefined ||
+      data.activityLevel !== undefined ||
+      data.fitnessGoal !== undefined ||
+      data.targetWeight !== undefined
+    ) {
+      const results = GoalService.calculateGoals({
+        age: profile.age,
+        gender: profile.gender,
+        weightKg: profile.weightKg,
+        heightCm: profile.heightCm,
+        activityLevel: profile.activityLevel,
+        fitnessGoal: profile.fitnessGoal,
+        targetWeight: profile.targetWeight,
+      });
+
+      const { bmi, bmr, tdee, ...goals } = results;
+
+      profile.bmi = bmi;
+      profile.dailyCalories = tdee;
+      profile.goals = goals;
+
       user.bmr = bmr;
-      user.tdee = profile.dailyCalories;
+      user.tdee = tdee;
+
+      // Update today's DailyLog if it exists
+      const today = format(new Date(), 'yyyy-MM-dd');
+      const dailyLog = await DailyLog.findOne({ userId, date: today });
+      if (dailyLog) {
+        dailyLog.calorieGoal = goals.calorieGoal;
+        dailyLog.proteinGoal = goals.proteinGoal;
+        dailyLog.carbsGoal = goals.carbsGoal;
+        dailyLog.fatGoal = goals.fatGoal;
+        dailyLog.waterGoal = goals.waterGlasses;
+        dailyLog.stepGoal = goals.stepGoal;
+        
+        dailyLog.goalsMeta = {
+          calorieGoal: goals.calorieGoal,
+          proteinGoal: goals.proteinGoal,
+          carbsGoal: goals.carbsGoal,
+          fatGoal: goals.fatGoal,
+          waterGlasses: goals.waterGlasses,
+          stepGoal: goals.stepGoal,
+        };
+        await dailyLog.save();
+      }
     }
 
     await user.save();

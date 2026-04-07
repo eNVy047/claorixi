@@ -22,13 +22,16 @@ export interface IDailyLog extends Document {
   carbsGoal: number;
   waterGlasses: number;
   waterGoal: number;
+  steps: number;
   stepGoal: number;
   caloriesBurnt: number;
   sleepHours: number;
   sleepScore: number;
   bedtime?: string;
   wakeTime?: string;
+  weightKg?: number;
   mood?: 'happy' | 'neutral' | 'sad' | 'angry' | 'tired';
+  exerciseLogged: boolean;
   goalMet: boolean;
   goalsMeta: IGoalsMeta;
   createdAt: Date;
@@ -49,25 +52,28 @@ const dailyLogSchema = new Schema<IDailyLog>(
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     date: { type: String, required: true },
     caloriesConsumed: { type: Number, default: 0 },
-    calorieGoal: { type: Number, required: true },
+    calorieGoal: { type: Number, required: true, default: 2000 },
     fatConsumed: { type: Number, default: 0 },
-    fatGoal: { type: Number, required: true },
+    fatGoal: { type: Number, required: true, default: 67 },
     proteinConsumed: { type: Number, default: 0 },
-    proteinGoal: { type: Number, required: true },
+    proteinGoal: { type: Number, required: true, default: 150 },
     carbsConsumed: { type: Number, default: 0 },
-    carbsGoal: { type: Number, required: true },
+    carbsGoal: { type: Number, required: true, default: 200 },
     waterGlasses: { type: Number, default: 0 },
     waterGoal: { type: Number, default: 8 },
+    steps: { type: Number, default: 0 },
     stepGoal: { type: Number, default: 10000 },
     caloriesBurnt: { type: Number, default: 0 },
     sleepHours: { type: Number, default: 0 },
     sleepScore: { type: Number, default: 0 },
     bedtime: { type: String },
     wakeTime: { type: String },
+    weightKg: { type: Number },
     mood: { 
       type: String, 
       enum: ['happy', 'neutral', 'sad', 'angry', 'tired'] 
     },
+    exerciseLogged: { type: Boolean, default: false },
     goalMet: { type: Boolean, default: false },
     goalsMeta: { type: goalMetaSchema, default: () => ({}) },
   },

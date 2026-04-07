@@ -7,7 +7,8 @@ import {
   StyleSheet,
   ActivityIndicator,
   KeyboardAvoidingView,
-  Platform
+  Platform,
+  Image,
 } from 'react-native';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -58,9 +59,7 @@ export default function RegisterScreen() {
 
       if (response.data.success) {
         const { token } = response.data.data;
-        // Save token so API interceptor can attach it for subsequent calls
         await AsyncStorage.setItem('authToken', token);
-        // New users must complete setup before reaching the dashboard
         router.replace('/(auth)/setup');
       }
     } catch (err: any) {
@@ -77,6 +76,17 @@ export default function RegisterScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
+      {/* ── Orange header with logo ── */}
+      <View style={styles.header}>
+        <Image
+          source={require('../../assets/images/icon.png')}
+          style={styles.logoImage}
+          resizeMode="contain"
+        />
+        <Text style={styles.logoText}>Caloxi</Text>
+      </View>
+
+      {/* ── White card ── */}
       <View style={styles.formContainer}>
         <Text style={styles.title}>Create Account</Text>
         <Text style={styles.subtitle}>Join Caloxi today</Text>
@@ -179,7 +189,7 @@ export default function RegisterScreen() {
           )}
         </TouchableOpacity>
 
-        {/* Navigation back to login (placeholder) */}
+        {/* Navigation back to login */}
         <TouchableOpacity style={styles.linkButton} onPress={() => router.push('/(auth)/sign-in')}>
           <Text style={styles.linkText}>Already have an account? Log in</Text>
         </TouchableOpacity>
@@ -189,82 +199,144 @@ export default function RegisterScreen() {
 }
 
 const styles = StyleSheet.create({
+  // ── Root ──────────────────────────────────────────────
   container: {
     flex: 1,
-    backgroundColor: '#F5F5DC', // Soft Cream background
+    backgroundColor: '#FF8C00',
   },
+
+  // ── Orange header with logo + brand name ──────────────
+  header: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: Platform.OS === 'ios' ? 64 : 44,
+    paddingBottom: 28,
+    flexDirection: 'column',
+    gap: 10,
+  },
+  logoImage: {
+    width: 68,
+    height: 68,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+  },
+  logoText: {
+    fontSize: 32,
+    color: '#fff',
+    fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
+    fontWeight: '700',
+    fontStyle: 'italic',
+    letterSpacing: 1.5,
+    textShadowColor: 'rgba(0,0,0,0.15)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 4,
+  },
+
+  // ── Card ──────────────────────────────────────────────
   formContainer: {
     flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: 24,
+    backgroundColor: '#FFFDF4',
+    borderTopLeftRadius: 36,
+    borderTopRightRadius: 36,
+    paddingHorizontal: 28,
+    paddingTop: 36,
+    paddingBottom: 32,
+    shadowColor: '#CC6A00',
+    shadowOffset: { width: 0, height: -6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    elevation: 10,
   },
+
+  // ── Heading ───────────────────────────────────────────
   title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 8,
+    fontSize: 30,
+    fontWeight: '800',
+    color: '#1A1A1A',
+    marginBottom: 6,
+    letterSpacing: -0.5,
     fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
   },
   subtitle: {
-    fontSize: 16,
-    color: '#666',
-    marginBottom: 32,
+    fontSize: 15,
+    color: '#888',
+    marginBottom: 24,
+    fontWeight: '400',
   },
+
+  // ── Input group ───────────────────────────────────────
   inputGroup: {
-    marginBottom: 16,
+    marginBottom: 14,
   },
   label: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#444',
-    marginBottom: 8,
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#FF8C00',
+    marginBottom: 7,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
   },
   input: {
     backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    borderWidth: 1.5,
+    borderColor: '#FFE0A3',
+    borderRadius: 14,
+    paddingHorizontal: 18,
+    paddingVertical: 13,
     fontSize: 16,
-    color: '#333',
+    color: '#1A1A1A',
+    shadowColor: '#FF8C00',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 1,
   },
+
+  // ── Validation states ─────────────────────────────────
   inputError: {
     borderColor: '#e74c3c',
   },
   errorText: {
     color: '#e74c3c',
     fontSize: 12,
-    marginTop: 4,
+    marginTop: 5,
+    marginLeft: 4,
   },
   apiError: {
-    backgroundColor: '#fdecea',
-    color: '#e74c3c',
+    backgroundColor: '#FFF0EE',
+    borderLeftWidth: 3,
+    borderLeftColor: '#e74c3c',
+    color: '#c0392b',
     padding: 12,
-    borderRadius: 8,
+    borderRadius: 10,
     marginBottom: 16,
-    textAlign: 'center',
+    fontSize: 13,
     overflow: 'hidden',
   },
+
+  // ── Primary button ────────────────────────────────────
   button: {
-    backgroundColor: '#FF8C00', // Primary Orange
-    paddingVertical: 16,
-    borderRadius: 8,
+    backgroundColor: '#FF8C00',
+    paddingVertical: 17,
+    borderRadius: 14,
     alignItems: 'center',
-    marginTop: 8,
+    marginTop: 10,
     shadowColor: '#FF8C00',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4, // for android
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.38,
+    shadowRadius: 12,
+    elevation: 6,
   },
   buttonText: {
     color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
+    fontSize: 17,
+    fontWeight: '800',
+    letterSpacing: 0.4,
   },
+
+  // ── Log-in link ───────────────────────────────────────
   linkButton: {
-    marginTop: 24,
+    marginTop: 22,
     alignItems: 'center',
   },
   linkText: {

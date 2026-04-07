@@ -3,9 +3,17 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Define the base URL dynamically based on the platform
+// export const API_BASE_URL = Platform.OS === 'android'
+//   ? 'https://czloxi-fitness-backend.onrender.com'
+//   : 'https://czloxi-fitness-backend.onrender.com'; // Set to physical network IP for both temporarily to guarantee connection on same network.
+
 export const API_BASE_URL = Platform.OS === 'android'
-  ? 'http://192.168.166.79:8000'
-  : 'http://192.168.166.79:8000'; // Set to physical network IP for both temporarily to guarantee connection on same network.
+  ? 'https://caloxi.xoraxi.cloud'
+  : 'https://caloxi.xoraxi.cloud'; // Set to physical network IP for both temporarily to guarantee connection on same network.
+
+// export const API_BASE_URL = Platform.OS === 'android'
+//   ? 'http://192.168.164.237:8000'
+//   : 'http://192.168.164.237:8000'; // Set to physical network IP for both temporarily to guarantee connection on same network.
 
 // Create a configured axios instance
 export const api = axios.create({
