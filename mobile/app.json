@@ -59,6 +59,7 @@
           "android": {
             "minifyEnabled": true,
             "shrinkResources": true,
+            "newArchEnabled": true,
             "proguardRules": "-keep class com.google.android.gms.internal.firebase-auth-api.** { *; }\n-keep class com.google.firebase.** { *; }\n-keep public class com.google.android.gms.internal.measurement.** { *; }"
           }
         }
