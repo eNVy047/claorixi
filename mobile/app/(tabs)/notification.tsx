@@ -50,7 +50,6 @@ const NotificationScreen = () => {
         setNotifications(response.data.data);
       }
     } catch (error) {
-      console.error('Error fetching notifications:', error);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -143,8 +142,8 @@ const NotificationScreen = () => {
 
   const hasUnread = notifications.some(n => !n.isRead);
 
-  // Render individual card
-  const renderCard = (item: Notification) => {
+  // Memoized individual card for better performance
+  const NotificationCard = React.memo(({ item }: { item: Notification }) => {
     const { emoji } = getTypeIcon(item.type);
     
     const renderRightActions = (progress: any, dragX: any) => {
@@ -184,7 +183,7 @@ const NotificationScreen = () => {
         </TouchableOpacity>
       </Swipeable>
     );
-  };
+  });
 
   if (loading && notifications.length === 0) {
     return (
@@ -245,13 +244,15 @@ const NotificationScreen = () => {
           keyExtractor={(item) => item.title}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           contentContainerStyle={styles.listContainer}
+          initialNumToRender={5}
+          maxToRenderPerBatch={10}
+          windowSize={5}
+          removeClippedSubviews={Platform.OS === 'android'}
           renderItem={({ item }) => (
             <View style={styles.groupContainer}>
               <Text style={styles.groupTitle}>{item.title}</Text>
               {item.data.map(notif => (
-                <View key={notif._id}>
-                  {renderCard(notif)}
-                </View>
+                <NotificationCard key={notif._id} item={notif} />
               ))}
             </View>
           )}

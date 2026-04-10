@@ -9,16 +9,17 @@ import {
   Alert,
   ActivityIndicator,
   TextInput,
-  Image,
   Modal,
   Dimensions
 } from 'react-native';
+import { Image } from 'expo-image';
 import { useRouter, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { api, API_BASE_URL } from '../../../lib/api';
 import { useAuth } from '../../../context/AuthContext';
-import { useGoals } from '../../../context/GoalContext';
+import { useGoalStore } from '../../../store/useGoalStore';
+import Toast from 'react-native-toast-message';
 
 type UserData = {
   _id: string;
@@ -58,11 +59,10 @@ const WORKOUT_TIME_OPTIONS = ['morning', 'afternoon', 'evening', 'night', 'flexi
 export default function ProfileScreen() {
   const router = useRouter();
   const { logout } = useAuth();
-  const { refreshGoals } = useGoals();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
-  
+
   const [user, setUser] = useState<UserData | null>(null);
   const [profile, setProfile] = useState<ProfileData | null>(null);
 
@@ -95,12 +95,11 @@ export default function ProfileScreen() {
       if (res.data.success) {
         const newData = res.data.data;
         populateProfileState(newData);
-        
+
         // Save fresh data to cache
         await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(newData));
       }
     } catch (err: any) {
-      console.error(err.response?.data || err.message);
       if (!user) {
         Alert.alert("Error", "Could not load profile. Please sign in again.");
       }
@@ -172,22 +171,14 @@ export default function ProfileScreen() {
         Alert.alert('Upload Failed', data.message);
       }
     } catch (err) {
-      console.error('Upload Error:', err);
       Alert.alert('Error', 'Failed to upload photo');
     } finally {
       setLoading(false);
     }
   };
 
-  const { setGoals } = useGoals();
   const [showGoalModal, setShowGoalModal] = useState(false);
   const [newGoalsSummary, setNewGoalsSummary] = useState({ calories: 0, protein: 0 });
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3000);
-  };
 
   const saveChanges = async () => {
     try {
@@ -212,20 +203,30 @@ export default function ProfileScreen() {
         const newData = res.data.data;
         setUser(newData.user);
         setProfile(newData.profile);
-        
-        // Update GoalContext in real-time
+
+        // Update Zustand store in real-time
         if (newData.goals) {
-          setGoals(newData.goals);
+          useGoalStore.getState().setGoals({
+            calorieGoal: newData.goals.calorieGoal,
+            proteinGoal: newData.goals.proteinGoal,
+            carbsGoal: newData.goals.carbsGoal,
+            fatGoal: newData.goals.fatGoal,
+            waterGoal: newData.goals.waterGlasses,
+            stepGoal: newData.goals.stepGoal,
+          });
+
+          Toast.show({
+            type: 'success',
+            text1: 'Goals Updated! 🎯',
+            text2: `Daily: ${newData.goals.calorieGoal} kcal | P: ${newData.goals.proteinGoal}g | C: ${newData.goals.carbsGoal}g | F: ${newData.goals.fatGoal}g`,
+            visibilityTime: 6000,
+          });
+
           setNewGoalsSummary({
             calories: newData.goals.calorieGoal,
             protein: newData.goals.proteinGoal,
           });
         }
-
-        // Update cache
-        await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(newData));
-        
-        showToast("✅ Goals updated based on your new profile!");
 
         if (isWeightChanged) {
           setShowGoalModal(true);
@@ -234,7 +235,6 @@ export default function ProfileScreen() {
         }
       }
     } catch (err: any) {
-      console.error(err.response?.data || err.message);
       Alert.alert('Error', 'Could not save profile changes');
     } finally {
       setSaving(false);
@@ -252,8 +252,8 @@ export default function ProfileScreen() {
       "Are you sure? This action is permanent and cannot be undone.",
       [
         { text: "Cancel", style: "cancel" },
-        { 
-          text: "Delete", 
+        {
+          text: "Delete",
           style: "destructive",
           onPress: async () => {
             try {
@@ -282,8 +282,8 @@ export default function ProfileScreen() {
   const renderChipOptions = (options: string[], selectedValue: string, onSelect: (v: string) => void) => (
     <View style={styles.chipRow}>
       {options.map(opt => (
-        <TouchableOpacity 
-          key={opt} 
+        <TouchableOpacity
+          key={opt}
           style={[styles.chip, selectedValue === opt && styles.chipSelected]}
           onPress={() => onSelect(opt)}
         >
@@ -308,12 +308,17 @@ export default function ProfileScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-        
+
         {/* AVATAR SECTION */}
         <View style={styles.avatarSection}>
           <TouchableOpacity onPress={handlePickImage} style={styles.avatarWrapper}>
             {profile?.profileImage ? (
-              <Image source={{ uri: profile.profileImage }} style={styles.avatarImage} />
+              <Image
+                source={{ uri: profile.profileImage }}
+                style={styles.avatarImage}
+                contentFit="cover"
+                transition={200}
+              />
             ) : (
               <View style={styles.avatarPlaceholder}>
                 <Text style={styles.avatarLetter}>{user?.fullName?.charAt(0) || user?.email?.charAt(0) || 'U'}</Text>
@@ -323,9 +328,9 @@ export default function ProfileScreen() {
               <Text style={{ fontSize: 12 }}>📷</Text>
             </View>
           </TouchableOpacity>
-          
+
           {isEditMode ? (
-            <TextInput 
+            <TextInput
               style={styles.nameInput}
               value={editName}
               onChangeText={setEditName}
@@ -363,12 +368,9 @@ export default function ProfileScreen() {
             <Text style={styles.proExpiry}>
               Expires on: {user.subscriptionEndDate ? new Date(user.subscriptionEndDate).toLocaleDateString() : 'N/A'}
             </Text>
-            <TouchableOpacity onPress={() => Alert.alert('Manage Subscription', 'Please manage your subscription through the app store.')}>
-              <Text style={styles.manageLink}>Manage Subscription</Text>
-            </TouchableOpacity>
           </View>
         ) : (
-          <TouchableOpacity 
+          <TouchableOpacity
             style={[styles.card, styles.upgradeCard]}
             onPress={() => router.push('/paywall')}
           >
@@ -473,27 +475,50 @@ export default function ProfileScreen() {
           )}
         </View>
 
+        {/* SUPPORT & LEGAL SECTION */}
+        {!isEditMode && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Support & Legal</Text>
+
+            <TouchableOpacity style={styles.menuRow} onPress={() => Alert.alert('Help & Support', 'Contact us at support@caloxi.com for any assistance.')}>
+              <View style={styles.menuRowLeft}>
+                <Text style={styles.menuIcon}>❓</Text>
+                <Text style={styles.menuLabel}>Help & Support</Text>
+              </View>
+              <Text style={styles.menuArrow}>→</Text>
+            </TouchableOpacity>
+
+            <View style={styles.divider} />
+
+            <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/privacy-policy')}>
+              <View style={styles.menuRowLeft}>
+                <Text style={styles.menuIcon}>🔒</Text>
+                <Text style={styles.menuLabel}>Privacy Policy</Text>
+              </View>
+              <Text style={styles.menuArrow}>→</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* DANGER ZONE */}
         {!isEditMode && (
           <View style={styles.dangerZone}>
             <TouchableOpacity style={styles.logoutBtn} onPress={performLogout}>
               <Text style={styles.logoutText}>Logout</Text>
             </TouchableOpacity>
-            
+
             <TouchableOpacity style={styles.deleteBtn} onPress={performDeleteAccount}>
               <Text style={styles.deleteText}>Delete Account</Text>
             </TouchableOpacity>
           </View>
         )}
 
-      </ScrollView>
-
-      {/* TOAST MESSAGE */}
-      {toastMessage && (
-        <View style={styles.toastContainer}>
-          <Text style={styles.toastText}>{toastMessage}</Text>
+        {/* Footer info */}
+        <View style={styles.footer}>
+          <Text style={styles.footerText}>Caloxi v1.0.0 (1)</Text>
+          <Text style={styles.footerText}>Made with ❤️ for a healthier you</Text>
         </View>
-      )}
+      </ScrollView>
 
       {/* GOAL SUMMARY MODAL */}
       <Modal
@@ -505,7 +530,7 @@ export default function ProfileScreen() {
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>New Goals Calculated!</Text>
             <Text style={styles.modalSubtitle}>Based on your new weight, we've updated your daily targets:</Text>
-            
+
             <View style={styles.modalStatRow}>
               <View style={styles.modalStat}>
                 <Text style={styles.modalStatSymbol}>🔥</Text>
@@ -519,7 +544,7 @@ export default function ProfileScreen() {
               </View>
             </View>
 
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.modalCloseBtn}
               onPress={() => {
                 setShowGoalModal(false);
@@ -798,23 +823,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textDecorationLine: 'underline',
   },
-  toastContainer: {
-    position: 'absolute',
-    bottom: 50,
-    left: 20,
-    right: 20,
-    backgroundColor: 'rgba(0,0,0,0.8)',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 12,
-    alignItems: 'center',
-    zIndex: 1000,
-  },
-  toastText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.4)',
@@ -841,10 +849,9 @@ const styles = StyleSheet.create({
   },
   modalSubtitle: {
     fontSize: 14,
-    color: '#666',
+    color: '#999',
     textAlign: 'center',
-    marginBottom: 24,
-    lineHeight: 20,
+    marginBottom: 5,
   },
   modalStatRow: {
     flexDirection: 'row',
@@ -943,6 +950,40 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: 'rgba(255,255,255,0.8)',
     lineHeight: 20,
+  },
+  menuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+  },
+  menuRowLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  menuIcon: {
+    fontSize: 18,
+    marginRight: 12,
+  },
+  menuLabel: {
+    fontSize: 16,
+    color: '#333',
+    fontWeight: '500',
+  },
+  menuArrow: {
+    color: '#CCC',
+  },
+  footer: {
+    marginTop: 40,
+    marginBottom: 40,
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  footerText: {
+    fontSize: 12,
+    color: '#999',
+    textAlign: 'center',
+    marginBottom: 4,
   },
 });
 

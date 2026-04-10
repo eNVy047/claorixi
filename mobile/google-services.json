@@ -7,9 +7,9 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:954872017033:android:5e6d9b50e1ebdfde555658",
+        "mobilesdk_app_id": "1:954872017033:android:df1ba95e47060fe3555658",
         "android_client_info": {
-          "package_name": "com.narayan098.mobile"
+          "package_name": "com.narayan098.caloxi"
         }
       },
       "oauth_client": [],

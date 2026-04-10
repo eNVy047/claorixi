@@ -8,8 +8,8 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  Image,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -82,7 +82,8 @@ export default function SignInScreen() {
         <Image
           source={require('../../assets/images/icon.png')}
           style={styles.logoImage}
-          resizeMode="contain"
+          contentFit="contain"
+          transition={200}
         />
         <Text style={styles.logoText}>Caloxi</Text>
       </View>
@@ -141,6 +142,13 @@ export default function SignInScreen() {
             </TouchableOpacity>
           </View>
           {errors.password && <Text style={styles.errorText}>{errors.password.message}</Text>}
+          
+          <TouchableOpacity 
+            style={styles.forgotPasswordButton} 
+            onPress={() => router.push('/(auth)/forgot-password')}
+          >
+            <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
+          </TouchableOpacity>
         </View>
 
         {/* Submit action */}
@@ -155,6 +163,14 @@ export default function SignInScreen() {
             <Text style={styles.buttonText}>Log In</Text>
           )}
         </TouchableOpacity>
+
+        {/* Privacy Policy Link */}
+        <View style={styles.agreementContainer}>
+          <Text style={styles.agreementText}>By continuing you agree to our </Text>
+          <TouchableOpacity onPress={() => router.push('/privacy-policy')}>
+            <Text style={styles.agreementLink}>Privacy Policy</Text>
+          </TouchableOpacity>
+        </View>
 
         <TouchableOpacity style={styles.linkButton} onPress={() => router.push('/(auth)/sign-up')}>
           <Text style={styles.linkText}>Don't have an account? Sign up</Text>
@@ -289,6 +305,16 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
   },
+  forgotPasswordButton: {
+    alignSelf: 'flex-end',
+    marginTop: 8,
+    paddingVertical: 4,
+  },
+  forgotPasswordText: {
+    color: '#FF8C00',
+    fontSize: 13,
+    fontWeight: '600',
+  },
 
   // ── Validation states ─────────────────────────────────
   inputError: {
@@ -340,6 +366,21 @@ const styles = StyleSheet.create({
   linkText: {
     color: '#FF8C00',
     fontSize: 14,
+    fontWeight: '600',
+  },
+  agreementContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 16,
+    flexWrap: 'wrap',
+  },
+  agreementText: {
+    color: '#888',
+    fontSize: 12,
+  },
+  agreementLink: {
+    color: '#FF8C00',
+    fontSize: 12,
     fontWeight: '600',
   },
 });

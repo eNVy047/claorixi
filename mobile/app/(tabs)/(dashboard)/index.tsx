@@ -1,18 +1,20 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity,
-  Image, Animated, AppState, ActivityIndicator,
+  Animated, AppState, ActivityIndicator,
   Alert, Modal, TextInput, StyleSheet, Platform, PanResponder
 } from 'react-native';
+import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import Svg, { Path, Circle, G, Text as SvgText } from 'react-native-svg';
-import { Pedometer } from 'expo-sensors';
 import { api } from '../../../lib/api';
-import { useGoals } from '../../../context/GoalContext';
+import { useGoalStore, selectCaloriesRemaining, selectWaterRemaining, selectStepsRemaining } from '../../../store/useGoalStore';
 import { useNotifications } from '../../../context/NotificationContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { format, startOfWeek, addDays, isToday, isFuture, parseISO } from 'date-fns';
+import { useOffline } from '../../../context/OfflineContext';
+import { CrashService } from '../../../lib/crashlytics';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
@@ -130,8 +132,26 @@ type Exercise = {
 
 export default function DashboardScreen() {
   const router = useRouter();
-  const { goals } = useGoals();
+  
+  // Efficient Zustand Selectors
+  const calorieGoalStore = useGoalStore(state => state.calorieGoal);
+  const caloriesConsumedStore = useGoalStore(state => state.caloriesConsumed);
+  const proteinGoalStore = useGoalStore(state => state.proteinGoal);
+  const proteinConsumedStore = useGoalStore(state => state.proteinConsumed);
+  const carbsGoalStore = useGoalStore(state => state.carbsGoal);
+  const carbsConsumedStore = useGoalStore(state => state.carbsConsumed);
+  const fatGoalStore = useGoalStore(state => state.fatGoal);
+  const fatConsumedStore = useGoalStore(state => state.fatConsumed);
+  const waterGoalStore = useGoalStore(state => state.waterGoal);
+  const waterConsumedStore = useGoalStore(state => state.waterConsumed);
+  const stepGoalStore = useGoalStore(state => state.stepGoal);
+  const stepsTakenStore = useGoalStore(state => state.stepsTaken);
+  const caloriesBurntStore = useGoalStore(state => state.caloriesBurnt);
+  
+  const caloriesRemaining = useGoalStore(selectCaloriesRemaining);
+  const waterRemaining = useGoalStore(selectWaterRemaining);
   const { unreadCount } = useNotifications();
+  const { isOffline } = useOffline();
 
   const [loading, setLoading] = useState(true);
   const [log, setLog] = useState<DailyLog | null>(null);
@@ -155,12 +175,6 @@ export default function DashboardScreen() {
   const notificationListener = useRef<any>(null);
   const responseListener = useRef<any>(null);
 
-  // Steps state
-  const [currentStepCount, setCurrentStepCount] = useState(0);
-  const lastStepWasBelowThresholdRef = useRef(true);
-  const lastStepAtMsRef = useRef(0);
-  const lastStepDayRef = useRef<string>(format(new Date(), 'yyyy-MM-dd'));
-
   // Exercise Logging Modal State
   const [isLogModalVisible, setIsLogModalVisible] = useState(false);
   const [exerciseLibrary, setExerciseLibrary] = useState<Exercise[]>([]);
@@ -168,7 +182,6 @@ export default function DashboardScreen() {
   // Push Notifications Listeners
   useEffect(() => {
     notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
-      console.log('Notification Received:', notification);
     });
 
     responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
@@ -199,7 +212,6 @@ export default function DashboardScreen() {
         await api.patch('/api/v1/activity/workout-checkin', { done: false });
       }
     } catch (error) {
-      console.error('Check-in Action Error:', error);
     }
   };
 
@@ -345,8 +357,18 @@ export default function DashboardScreen() {
     const subscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
         checkDateChange();
+        // Refresh today's store data when app comes to foreground
+        useGoalStore.getState().fetchOverview();
       }
     });
+
+    // Handle midnight reset specifically in the store as well
+    const now = new Date();
+    const tonight = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+    const msUntilMidnight = tonight.getTime() - now.getTime() + 1000;
+    const timeout: any = setTimeout(() => {
+      useGoalStore.getState().midnightReset();
+    }, msUntilMidnight);
 
     // Set initial date
     AsyncStorage.setItem(DATE_STORAGE_KEY, format(new Date(), 'yyyy-MM-dd'));
@@ -368,69 +390,69 @@ export default function DashboardScreen() {
     }, [selectedDate])
   );
 
-  // Sync steps to backend every 5 minutes
-  useEffect(() => {
-    const syncInterval = setInterval(() => {
-      if (currentStepCount > 0) syncSteps();
-    }, 5 * 60 * 1000);
-    return () => clearInterval(syncInterval);
-  }, [currentStepCount]);
-
-  // Final sync when app goes background/inactive
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', (state) => {
-      if ((state === 'background' || state === 'inactive') && currentStepCount > 0) {
-        syncSteps();
-      }
-    });
-    return () => sub.remove();
-  }, [currentStepCount, activity]);
-
-  // Pedometer-based step detection (uses OS background tracking)
-  useEffect(() => {
-    let subscription: Pedometer.Subscription | null = null;
-    let lastCumulative = 0;
-
-    const startTracking = async () => {
-      const perm = await Pedometer.requestPermissionsAsync();
-      if (perm.status !== 'granted') return;
-
-      const isAvailable = await Pedometer.isAvailableAsync();
-      if (isAvailable) {
-        subscription = Pedometer.watchStepCount(result => {
-          const delta = result.steps - lastCumulative;
-          lastCumulative = result.steps;
-          if (delta > 0) {
-            setCurrentStepCount(prev => prev + delta);
-          }
-        });
-      }
-    };
-
-    startTracking();
-    return () => subscription?.remove();
-  }, []);
-
-
-
   // Persist total steps for background sync (best-effort)
   useEffect(() => {
-    const totalToday = (activity?.steps || 0) + currentStepCount;
+    const totalToday = stepsTakenStore;
+    if (totalToday > 0) {
+      CrashService.log(`👣 Local steps recorded: ${totalToday}`);
+    }
     setStepsForBackgroundSync(totalToday).catch(() => { });
-  }, [activity?.steps, currentStepCount]);
+  }, [stepsTakenStore]);
 
   const fetchDayLog = async (date: string) => {
+    CrashService.log(`📅 Viewing dashboard for date: ${date}`);
     try {
       setLoading(true);
+      if (isOffline && date === todayDate) {
+        setLog({
+          date: todayDate,
+          calorieGoal: calorieGoalStore,
+          caloriesConsumed: caloriesConsumedStore,
+          proteinGoal: proteinGoalStore,
+          proteinConsumed: proteinConsumedStore,
+          fatGoal: fatGoalStore,
+          fatConsumed: fatConsumedStore,
+          carbsGoal: carbsGoalStore,
+          carbsConsumed: carbsConsumedStore,
+          waterGlasses: waterConsumedStore,
+          waterGoal: waterGoalStore,
+          caloriesBurnt: caloriesBurntStore,
+          stepGoal: stepGoalStore,
+        } as any);
+        setLoading(false);
+        Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+        return;
+      }
+
       // Fade out
       Animated.timing(fadeAnim, { toValue: 0, duration: 150, useNativeDriver: true }).start(async () => {
         try {
           const response = await api.get(`/api/v1/dashboard/day?date=${date}`);
           if (response.data.success) {
-            setLog(response.data.data.log);
+            const fetchedLog = response.data.data.log;
+            setLog(fetchedLog);
+            // If we just fetched today's log, keep the global store in sync
+            if (date === todayDate) {
+              useGoalStore.getState().updateConsumed({
+                caloriesConsumed: fetchedLog.caloriesConsumed,
+                proteinConsumed: fetchedLog.proteinConsumed,
+                carbsConsumed: fetchedLog.carbsConsumed,
+                fatConsumed: fetchedLog.fatConsumed,
+                waterConsumed: fetchedLog.waterGlasses,
+                stepsTaken: fetchedLog.steps,
+                caloriesBurnt: fetchedLog.caloriesBurnt,
+              });
+              useGoalStore.getState().setGoals({
+                calorieGoal: fetchedLog.calorieGoal,
+                proteinGoal: fetchedLog.proteinGoal,
+                carbsGoal: fetchedLog.carbsGoal,
+                fatGoal: fetchedLog.fatGoal,
+                waterGoal: fetchedLog.waterGoal,
+                stepGoal: fetchedLog.stepGoal,
+              });
+            }
           }
         } catch (error: any) {
-          console.error('Error fetching day log:', error.response?.data || error.message);
         } finally {
           setLoading(false);
           // Fade in
@@ -444,18 +466,16 @@ export default function DashboardScreen() {
 
   const syncSteps = async () => {
     try {
-      const newTotal = (activity?.steps || 0) + currentStepCount;
+      const newTotal = stepsTakenStore;
       const response = await api.patch('/api/v1/activity/steps', { 
         steps: newTotal,
         date: selectedDate
       });
       if (response.data.success) {
         setActivity(response.data.data);
-        setCurrentStepCount(0);
         fetchDayLog(selectedDate);
       }
     } catch (error) {
-      console.error('Error syncing steps:', error);
     }
   };
 
@@ -466,7 +486,6 @@ export default function DashboardScreen() {
         setActivity(response.data.data);
       }
     } catch (error: any) {
-      console.error('Error fetching activity:', error.response?.data || error.message);
     }
   };
 
@@ -509,28 +528,54 @@ export default function DashboardScreen() {
 
     try {
       setLoading(true);
+      const mins = parseInt(duration);
+      const exerciseCal = Math.round((mins * (selectedExercise.met || 3.5) * userWeight) / 60);
+
       const response = await api.post('/api/v1/activity/exercise', {
         exerciseName: selectedExercise.name,
-        duration: parseInt(duration),
+        duration: mins,
         sets: sets ? parseInt(sets) : undefined,
         reps: reps ? parseInt(reps) : undefined,
         isDaily: isDailyExercise,
         days: isDailyExercise ? selectedDays : undefined,
         date: selectedDate,
       });
-      if (response.data.success) {
+
+      // Update local state and store optimistically
+      const newExercise = {
+        _id: `temp-${Date.now()}`,
+        name: selectedExercise.name,
+        duration: mins,
+        caloriesBurnt: exerciseCal,
+        sets: sets ? parseInt(sets) : undefined,
+        reps: reps ? parseInt(reps) : undefined,
+      };
+
+      if (response.data.offline) {
+        if (selectedDate === todayDate) {
+          useGoalStore.getState().updateConsumed({
+            caloriesBurnt: caloriesBurntStore + exerciseCal,
+          });
+          setActivity((prev: any) => ({
+            ...prev,
+            caloriesBurnt: (prev?.caloriesBurnt || 0) + exerciseCal,
+            exercises: [newExercise, ...(prev?.exercises || [])],
+          }));
+        }
+      } else if (response.data.success) {
         setActivity(response.data.data);
-        setIsLogModalVisible(false);
-        setSelectedExercise(null);
-        setDuration('');
-        setSets('');
-        setReps('');
-        setIsDailyExercise(false);
-        setSelectedDays([]);
-        setSearchQuery('');
-        fetchDayLog(selectedDate);
-        fetchRoutines();
       }
+
+      setIsLogModalVisible(false);
+      setSelectedExercise(null);
+      setDuration('');
+      setSets('');
+      setReps('');
+      setIsDailyExercise(false);
+      setSelectedDays([]);
+      setSearchQuery('');
+      if (!response.data.offline) fetchDayLog(selectedDate);
+      fetchRoutines();
     } catch (_) {
       Alert.alert('Error', 'Could not log exercise');
     } finally {
@@ -539,6 +584,7 @@ export default function DashboardScreen() {
   };
 
   const saveNewSleep = async () => {
+    CrashService.log('😴 Saving sleep log');
     try {
       setLoading(true);
       const bedtimeStr = `${String(bedTimeData.h).padStart(2, '0')}:${String(bedTimeData.m).padStart(2, '0')}`;
@@ -594,12 +640,18 @@ export default function DashboardScreen() {
   };
 
   const incrementWater = async () => {
-    if (!log || selectedDate !== todayDate) return; // Only today is editable
-    setLog({ ...log, waterGlasses: log.waterGlasses + 1 });
+    if (!log || selectedDate !== todayDate) return; 
+    
+    CrashService.log('💧 Incrementing water glass');
+    // Optimistic Update
+    const newCount = log.waterGlasses + 1;
+    setLog({ ...log, waterGlasses: newCount });
+    useGoalStore.getState().updateConsumed({ waterConsumed: newCount });
+
     try {
       await api.patch('/api/v1/dashboard/water', { date: selectedDate });
     } catch (_) {
-      setLog({ ...log, waterGlasses: log.waterGlasses });
+      // Interceptor handles queueing
     }
   };
 
@@ -741,19 +793,19 @@ export default function DashboardScreen() {
   }
 
   const isViewingToday = selectedDate === todayDate;
-  const effectiveGoal = log?.calorieGoal || goals.calorieGoal;
+  const effectiveGoal = log?.calorieGoal || calorieGoalStore;
   const remaining = Math.max(0, effectiveGoal - (log?.caloriesConsumed || 0));
   const consumed = log?.caloriesConsumed || 0;
   const consumedPercent = effectiveGoal > 0 ? consumed / effectiveGoal : 0;
   const isAfter2PM = new Date().getHours() >= 14;
 
-  const waterGoal = log?.waterGoal || goals.waterGlasses;
-  const stepGoal = log?.stepGoal || goals.stepGoal;
+  const waterGoal = log?.waterGoal || waterGoalStore;
+  const stepGoal = log?.stepGoal || stepGoalStore;
   const stepLengthMeters = (userHeightCm * 0.415) / 100;
 
-  const proPct = Math.min(((log?.proteinConsumed || 0) / (log?.proteinGoal || goals.proteinGoal)) * 100, 100) || 0;
-  const fatPct = Math.min(((log?.fatConsumed || 0) / (log?.fatGoal || goals.fatGoal)) * 100, 100) || 0;
-  const carbPct = Math.min(((log?.carbsConsumed || 0) / (log?.carbsGoal || goals.carbsGoal)) * 100, 100) || 0;
+  const proPct = Math.min(((log?.proteinConsumed || 0) / (log?.proteinGoal || proteinGoalStore)) * 100, 100) || 0;
+  const fatPct = Math.min(((log?.fatConsumed || 0) / (log?.fatGoal || fatGoalStore)) * 100, 100) || 0;
+  const carbPct = Math.min(((log?.carbsConsumed || 0) / (log?.carbsGoal || carbsGoalStore)) * 100, 100) || 0;
 
   return (
     <View style={styles.container}>
@@ -866,11 +918,11 @@ export default function DashboardScreen() {
                   consumed={consumed}
                   calorieGoal={effectiveGoal}
                   fatConsumed={log?.fatConsumed || 0}
-                  fatGoal={log?.fatGoal || goals.fatGoal}
+                  fatGoal={log?.fatGoal || fatGoalStore}
                   proteinConsumed={log?.proteinConsumed || 0}
-                  proteinGoal={log?.proteinGoal || goals.proteinGoal}
+                  proteinGoal={log?.proteinGoal || proteinGoalStore}
                   carbsConsumed={log?.carbsConsumed || 0}
-                  carbsGoal={log?.carbsGoal || goals.carbsGoal}
+                  carbsGoal={log?.carbsGoal || carbsGoalStore}
                 />
 
                 {/* Right: Macro list */}
@@ -883,7 +935,7 @@ export default function DashboardScreen() {
                       <View style={[styles.macroBar, { backgroundColor: '#F0F0F0' }]}>
                         <View style={[styles.macroBarFill, { width: `${fatPct}%`, backgroundColor: '#6CB4F5' }]} />
                       </View>
-                      <Text style={styles.macroGrams}>{log?.fatConsumed || 0}g / {log?.fatGoal || goals.fatGoal}g</Text>
+                      <Text style={styles.macroGrams}>{log?.fatConsumed || 0}g / {log?.fatGoal || fatGoalStore}g</Text>
                     </View>
                   </View>
                   {/* Protein */}
@@ -894,7 +946,7 @@ export default function DashboardScreen() {
                       <View style={[styles.macroBar, { backgroundColor: '#F0F0F0' }]}>
                         <View style={[styles.macroBarFill, { width: `${proPct}%`, backgroundColor: '#F5C842' }]} />
                       </View>
-                      <Text style={styles.macroGrams}>{log?.proteinConsumed || 0}g / {log?.proteinGoal || goals.proteinGoal}g</Text>
+                      <Text style={styles.macroGrams}>{log?.proteinConsumed || 0}g / {log?.proteinGoal || proteinGoalStore}g</Text>
                     </View>
                   </View>
                   {/* Carbs */}
@@ -905,7 +957,7 @@ export default function DashboardScreen() {
                       <View style={[styles.macroBar, { backgroundColor: '#F0F0F0' }]}>
                         <View style={[styles.macroBarFill, { width: `${carbPct}%`, backgroundColor: '#5BCA8A' }]} />
                       </View>
-                      <Text style={styles.macroGrams}>{log?.carbsConsumed || 0}g / {log?.carbsGoal || goals.carbsGoal}g</Text>
+                      <Text style={styles.macroGrams}>{log?.carbsConsumed || 0}g / {log?.carbsGoal || carbsGoalStore}g</Text>
                     </View>
                   </View>
                 </View>
@@ -969,21 +1021,21 @@ export default function DashboardScreen() {
                   <View style={styles.ringContainer}>
                     <Svg width={140} height={140}>
                       <Circle cx="70" cy="70" r="55" stroke="#F0E6D2" strokeWidth="10" fill="none" />
-                      <Circle cx="70" cy="70" r="55" stroke="#FF8C00" strokeWidth="10" strokeDasharray={`${2 * Math.PI * 55}`} strokeDashoffset={`${2 * Math.PI * 55 * (1 - Math.min((activity.steps + currentStepCount) / (stepGoal || 1), 1))}`} strokeLinecap="round" fill="none" transform="rotate(-90 70 70)" />
+                      <Circle cx="70" cy="70" r="55" stroke="#FF8C00" strokeWidth="10" strokeDasharray={`${2 * Math.PI * 55}`} strokeDashoffset={`${2 * Math.PI * 55 * (1 - Math.min((stepsTakenStore) / (stepGoalStore || 1), 1))}`} strokeLinecap="round" fill="none" transform="rotate(-90 70 70)" />
                     </Svg>
                     <View style={styles.ringCenterText}>
-                      <Text style={styles.ringStepsVal}>{activity.steps + currentStepCount}</Text>
-                      <Text style={styles.ringStepsLabel}>/ {(stepGoal || 0).toLocaleString()}</Text>
+                      <Text style={styles.ringStepsVal}>{stepsTakenStore}</Text>
+                      <Text style={styles.ringStepsLabel}>/ {(stepGoalStore || 0).toLocaleString()}</Text>
                     </View>
                   </View>
                   <View style={styles.stepStats}>
                     <View style={styles.stepStatItem}>
                       <Text style={styles.stepStatLabel}>Distance</Text>
-                      <Text style={styles.stepStatVal}>{(((activity.steps + currentStepCount) * stepLengthMeters) / 1000).toFixed(2)} km</Text>
+                      <Text style={styles.stepStatVal}>{((stepsTakenStore * 0.762) / 1000).toFixed(2)} km</Text>
                     </View>
                     <View style={styles.stepStatItem}>
                       <Text style={styles.stepStatLabel}>Burned</Text>
-                      <Text style={styles.stepStatVal}>{Math.round((activity.steps + currentStepCount) * 0.04)} kcal</Text>
+                      <Text style={styles.stepStatVal}>{Math.round(stepsTakenStore * 0.04)} kcal</Text>
                     </View>
                   </View>
                 </View>
@@ -992,10 +1044,10 @@ export default function DashboardScreen() {
               {/* TOTAL CALORIES BURNT SUMMARY CARD */}
               <View style={styles.card}>
                 {(() => {
-                  const liveStepCalories = Math.round((activity.steps + currentStepCount) * 0.04);
+                  const liveStepCalories = Math.round(stepsTakenStore * 0.04);
                   const exerciseCalories = activity.exercises?.reduce((sum: number, ex: any) => sum + (ex.caloriesBurnt || 0), 0) || 0;
                   const burnt = liveStepCalories + exerciseCalories;
-                  const goal = goals.caloriesBurntGoal || 1;
+                  const goal = useGoalStore.getState().caloriesBurntGoal || 1;
                   const progress = Math.min(100, Math.round((burnt / goal) * 100));
 
                   let message = "Keep moving! You can do it 💪";

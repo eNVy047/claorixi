@@ -8,8 +8,8 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  Image,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -81,7 +81,8 @@ export default function RegisterScreen() {
         <Image
           source={require('../../assets/images/icon.png')}
           style={styles.logoImage}
-          resizeMode="contain"
+          contentFit="contain"
+          transition={200}
         />
         <Text style={styles.logoText}>Caloxi</Text>
       </View>
@@ -188,6 +189,15 @@ export default function RegisterScreen() {
             <Text style={styles.buttonText}>Sign Up</Text>
           )}
         </TouchableOpacity>
+
+        {/* Privacy Policy Link */}
+        <View style={styles.agreementContainer}>
+          <Text style={styles.agreementText}>By registering you agree to our </Text>
+          <Text style={styles.agreementText}>Terms of Service and </Text>
+          <TouchableOpacity onPress={() => router.push('/privacy-policy')}>
+            <Text style={styles.agreementLink}>Privacy Policy</Text>
+          </TouchableOpacity>
+        </View>
 
         {/* Navigation back to login */}
         <TouchableOpacity style={styles.linkButton} onPress={() => router.push('/(auth)/sign-in')}>
@@ -342,6 +352,21 @@ const styles = StyleSheet.create({
   linkText: {
     color: '#FF8C00',
     fontSize: 14,
+    fontWeight: '600',
+  },
+  agreementContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 16,
+    flexWrap: 'wrap',
+  },
+  agreementText: {
+    color: '#888',
+    fontSize: 12,
+  },
+  agreementLink: {
+    color: '#FF8C00',
+    fontSize: 12,
     fontWeight: '600',
   },
 });

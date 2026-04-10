@@ -8,6 +8,8 @@ import React, {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter, useSegments } from 'expo-router';
 import { api } from '../lib/api';
+import * as Notifications from 'expo-notifications';
+import { CrashService } from '../lib/crashlytics';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -56,7 +58,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Validate token with backend
         const response = await api.get('/api/v1/auth/verify');
         if (response.data.success) {
-          setUser(response.data.data.user);
+          const userData = response.data.data.user;
+          setUser(userData);
+          CrashService.setUserIdentity(
+            userData.id,
+            userData.email,
+            userData.subscriptionStatus || 'none'
+          );
         } else {
           // Unexpected non-success — clear token
           await AsyncStorage.removeItem('authToken');
@@ -66,6 +74,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Token expired or invalid — clear it silently
         await AsyncStorage.removeItem('authToken');
         setUser(null);
+        CrashService.clearUserIdentity();
       } finally {
         setIsLoading(false);
       }
@@ -80,29 +89,54 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const inAuthGroup = segments[0] === '(auth)';
     const inTabsGroup = segments[0] === '(tabs)';
+    const isAtRoot = !segments[0];
 
-    if (user && inAuthGroup) {
-      // Logged in but on an auth screen — send to dashboard
-      router.replace('/(tabs)/(dashboard)');
-    } else if (!user && inTabsGroup) {
-      // Not logged in but on a dashboard screen — send to login
-      router.replace('/(auth)/sign-in');
+    if (user) {
+      if (inAuthGroup || isAtRoot) {
+        router.replace('/(tabs)/(dashboard)');
+      }
+    } else {
+      if (inTabsGroup || isAtRoot) {
+        router.replace('/(auth)/sign-in');
+      }
     }
   }, [user, segments, isLoading]);
 
   const login = useCallback(async (token: string, authUser: AuthUser) => {
     await AsyncStorage.setItem('authToken', token);
+    
+    // Sync FCM token to backend
+    try {
+      const pushToken = (await Notifications.getDevicePushTokenAsync()).data;
+      if (pushToken) {
+        await api.patch('/api/v1/user/fcm-token', { fcmToken: pushToken });
+      }
+    } catch (error: any) {
+      CrashService.recordError(error, 'SyncPushTokenError');
+    }
+
     setUser(authUser);
     router.replace('/(tabs)/(dashboard)');
   }, [router]);
 
   const logout = useCallback(async () => {
     try {
+      // Step 1: Remove FCM token from backend
+      await api.delete('/api/v1/user/fcm-token');
+    } catch (_) {}
+
+    try {
       await api.post('/api/v1/auth/logout');
     } catch (_) {
       // Ignore network errors on logout
     }
+    
+    // Step 2: Clear local token
     await AsyncStorage.removeItem('authToken');
+    
+    // Step 3: Clear FCM token locally (Expo manages this automatically usually)
+    // but we can unregister if needed. For now, unsetting from backend is the key.
+
     setUser(null);
     router.replace('/(auth)/sign-in');
   }, [router]);
@@ -113,8 +147,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (response.data.success) {
         setUser(response.data.data.user);
       }
-    } catch (error) {
-      console.error('Failed to refresh user:', error);
+    } catch (error: any) {
+      CrashService.recordError(error, 'RefreshUserError');
     }
   }, []);
 

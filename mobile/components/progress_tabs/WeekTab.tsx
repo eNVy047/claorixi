@@ -21,7 +21,7 @@ export default function WeekTab({ data, goals }: any) {
 
   const safeCalorieGoal = goals?.calorieGoal || 2000;
   const safeStepGoal = goals?.stepGoal || 10000;
-  const safeWaterGoal = goals?.waterGlasses || 8;
+  const safeWaterGoal = goals?.waterGoal || 8;
   const safeSleepGoal = goals?.sleepGoal || 8;
 
   const getMetricData = (metric: string) => {

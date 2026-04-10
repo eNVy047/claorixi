@@ -76,7 +76,7 @@ export default function PaywallScreen() {
           }
         })
         .catch((error: any) => {
-          Alert.alert('Error', `Payment failed: ${error.description}`);
+          Alert.alert('Error', `Payment failed`);
         });
     } catch (error: any) {
       Alert.alert('Error', 'Failed to initiate payment');
@@ -126,7 +126,7 @@ export default function PaywallScreen() {
               <Text style={styles.trialBadgeText}>7-day free</Text>
             </View>
           </View>
-          <Text style={styles.planPrice}>₹99</Text>
+          <Text style={styles.planPrice}>₹29</Text>
           <Text style={styles.planPeriod}>per month</Text>
           <View style={styles.discountPill}>
             <Text style={styles.discountText}>50% OFF</Text>
@@ -144,7 +144,7 @@ export default function PaywallScreen() {
               <Text style={styles.trialBadgeText}>Best Value</Text>
             </View>
           </View>
-          <Text style={styles.planPrice}>₹999</Text>
+          <Text style={styles.planPrice}>₹299</Text>
           <Text style={styles.planPeriod}>per year</Text>
           <View style={[styles.discountPill, styles.greenPill]}>
             <Text style={styles.discountText}>SAVE 15%</Text>

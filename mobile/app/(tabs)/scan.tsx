@@ -5,16 +5,18 @@ import {
   StyleSheet, 
   TouchableOpacity, 
   ActivityIndicator, 
-  Image, 
   Alert, 
   Dimensions, 
-  Animated, 
+  Animated,
   Easing,
   PanResponder,
   Platform,
   ScrollView,
-  StatusBar
+  StatusBar,
+  Modal,
+  TextInput
 } from 'react-native';
+import { Image } from 'expo-image';
 import { CameraView, useCameraPermissions, FlashMode } from 'expo-camera';
 import { useRouter, Stack } from 'expo-router';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -22,7 +24,8 @@ import * as ImagePicker from 'expo-image-picker';
 import Svg, { Path } from 'react-native-svg';
 import { BlurView } from 'expo-blur';
 import { api } from '../../lib/api';
-import { useGoals } from '../../context/GoalContext';
+import { useGoalStore } from '../../store/useGoalStore';
+import { CrashService } from '../../lib/crashlytics';
 
 const { width, height } = Dimensions.get('window');
 const SCAN_FRAME_SIZE = width * 0.7;
@@ -45,11 +48,11 @@ const IngredientCard = ({ name }: { name: string }) => {
   return (
     <View style={styles.ingredientCard}>
       <View style={styles.ingredientImageContainer}>
-        {loading && <View style={[styles.ingredientImage, styles.skeleton]} />}
         <Image 
           source={{ uri: imageUrl }} 
           style={styles.ingredientImage} 
-          onLoadEnd={() => setLoading(false)}
+          contentFit="cover"
+          transition={200}
         />
       </View>
       <Text style={styles.ingredientName} numberOfLines={1}>{name}</Text>
@@ -59,7 +62,7 @@ const IngredientCard = ({ name }: { name: string }) => {
 
 export default function ScanScreen() {
   const router = useRouter();
-  const { goals } = useGoals();
+  const store = useGoalStore();
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
   
@@ -80,6 +83,8 @@ export default function ScanScreen() {
   const sheetAnim = useRef(new Animated.Value(height)).current;
   const overlayOpacity = useRef(new Animated.Value(0)).current;
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const [showManualForm, setShowManualForm] = useState(false);
+  const [manualData, setManualData] = useState({ foodName: '', calories: '', protein: '', carbs: '', fat: '' });
 
   // Slider Logic
   const sliderWidth = width - 80;
@@ -146,50 +151,66 @@ export default function ScanScreen() {
   const takePicture = async () => {
     if (cameraRef.current) {
       try {
-        const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.5 });
-        if (photo && photo.uri && photo.base64) {
+        const photo = await cameraRef.current.takePictureAsync({
+          base64: true,
+          quality: 0.7,
+        });
+        if (photo) {
+          CrashService.log('📸 Photo captured via camera');
           setPhotoUri(photo.uri);
           setLastImage(photo.uri);
-          setImageBase64(photo.base64);
-          analyzeImage(photo.base64);
+          setImageBase64(photo.base64 || null);
+          analyzeImage(photo.base64 || '');
         }
       } catch (e) {
-        console.error('Failed to take picture:', e);
       }
     }
   };
 
   const pickFromGallery = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: 'images',
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
-      quality: 0.5,
+      quality: 0.7,
       base64: true,
     });
 
-    if (!result.canceled && result.assets[0].base64) {
-      const asset = result.assets[0];
-      setPhotoUri(asset.uri);
-      setLastImage(asset.uri);
-      setImageBase64(asset.base64 as string);
-      analyzeImage(asset.base64 as string);
+    if (!result.canceled) {
+      CrashService.log('🖼️ Photo selected from library');
+      setPhotoUri(result.assets[0].uri);
+      setLastImage(result.assets[0].uri);
+      setImageBase64(result.assets[0].base64 || null);
+      analyzeImage(result.assets[0].base64 || '');
     }
   };
 
-  const analyzeImage = async (base64String: string) => {
+  const analyzeImage = async (base64: string) => {
+    CrashService.log('🤖 Sending image for Gemini analysis');
     setAnalyzing(true);
     try {
       const resp = await api.post('/api/v1/food/analyze', {
-        imageBase64: base64String,
+        imageBase64: base64,
       });
       if (resp.data.success) {
         setNutritionData(resp.data.data.data || resp.data.data);
         showSheet();
       }
-    } catch (error) {
-      console.error('Analysis failed:', error);
-      Alert.alert('Analysis Failed', 'Could not analyze the food image.');
-      retake();
+    } catch (error: any) {
+      CrashService.recordError(error, 'GeminiAnalysisError');
+      // Check if it's a network error
+      if (!error.response && error.code !== 'ECONNABORTED') {
+        Alert.alert(
+          'Offline',
+          'AI scan requires internet. You can manually log food instead.',
+          [
+            { text: 'Manual Log', onPress: () => setShowManualForm(true) },
+            { text: 'Cancel', onPress: retake, style: 'cancel' }
+          ]
+        );
+      } else {
+        Alert.alert('Analysis Failed', 'Could not analyze the food image.');
+        retake();
+      }
     } finally {
       setAnalyzing(false);
     }
@@ -241,6 +262,7 @@ export default function ScanScreen() {
 
   const handleAction = async (type: 'eat' | 'test') => {
     if (!nutritionData || !imageBase64) return;
+    CrashService.log(`🍽️ Action: ${type === 'eat' ? 'Log Meal' : 'Save Test'}`);
     try {
       await api.post('/api/v1/food/save', {
         ...nutritionData,
@@ -248,14 +270,60 @@ export default function ScanScreen() {
         type,
       });
       if (type === 'eat') {
+        // Update global store immediately
+        useGoalStore.getState().updateConsumed({
+          caloriesConsumed: store.caloriesConsumed + nutritionData.calories,
+          proteinConsumed: store.proteinConsumed + nutritionData.protein,
+          carbsConsumed: store.carbsConsumed + nutritionData.carbs,
+          fatConsumed: store.fatConsumed + nutritionData.fat,
+        });
         Alert.alert('Success', 'Food logged successfully!');
       } else {
         Alert.alert('Test Saved', 'Scan saved as test for 7 days.');
       }
       router.back();
     } catch (error) {
-      console.error('Save failed:', error);
       Alert.alert('Error', 'Failed to save food scan.');
+    }
+  };
+
+  const handleManualSave = async () => {
+    const { foodName, calories, protein, carbs, fat } = manualData;
+    if (!foodName || !calories) {
+      Alert.alert('Error', 'Please enter food name and calories.');
+      return;
+    }
+
+    const nutrition = {
+      foodName,
+      calories: parseInt(calories),
+      protein: parseInt(protein) || 0,
+      carbs: parseInt(carbs) || 0,
+      fat: parseInt(fat) || 0,
+      description: 'Manually logged food',
+      ingredients: [],
+    };
+
+    try {
+      // This will automatically be queued by the api interceptor if online
+      await api.post('/api/v1/food/save', {
+        ...nutrition,
+        type: 'eat',
+      });
+
+      // Update global store immediately (Optimistic)
+      useGoalStore.getState().updateConsumed({
+        caloriesConsumed: store.caloriesConsumed + nutrition.calories,
+        proteinConsumed: store.proteinConsumed + nutrition.protein,
+        carbsConsumed: store.carbsConsumed + nutrition.carbs,
+        fatConsumed: store.fatConsumed + nutrition.fat,
+      });
+
+      Alert.alert('Success', 'Food logged successfully!');
+      setShowManualForm(false);
+      router.back();
+    } catch (error) {
+      Alert.alert('Error', 'Failed to save food log.');
     }
   };
 
@@ -335,7 +403,7 @@ export default function ScanScreen() {
             <View style={styles.buttonRow}>
               <TouchableOpacity onPress={pickFromGallery} style={styles.thumbBtn}>
                 {lastImage ? (
-                  <Image source={{ uri: lastImage }} style={styles.thumbImg} />
+                  <Image source={{ uri: lastImage }} style={styles.thumbImg} transition={200} />
                 ) : (
                   <Ionicons name="images" size={24} color="#fff" />
                 )}
@@ -355,7 +423,7 @@ export default function ScanScreen() {
         </View>
       ) : (
         <View style={styles.previewContainer}>
-          <Image source={{ uri: photoUri }} style={styles.previewImage} />
+          <Image source={{ uri: photoUri }} style={styles.previewImage} contentFit="cover" transition={200} />
           <BlurView intensity={Platform.OS === 'ios' ? 20 : 40} tint="light" style={StyleSheet.absoluteFill} />
           
           <StatusBar barStyle="light-content" />
@@ -385,7 +453,7 @@ export default function ScanScreen() {
                   </View>
                 </View>
                 <Text style={styles.goalPercent}>
-                  {goals.calorieGoal > 0 ? `${Math.round((nutritionData.calories / goals.calorieGoal) * 100)}% of your daily ${goals.calorieGoal} kcal goal` : ''}
+                  {store.calorieGoal > 0 ? `${Math.round((nutritionData.calories / store.calorieGoal) * 100)}% of your daily ${store.calorieGoal} kcal goal` : ''}
                 </Text>
 
                 <View style={styles.macroRow}>
@@ -443,6 +511,60 @@ export default function ScanScreen() {
               </ScrollView>
             </Animated.View>
           )}
+
+          {/* MANUAL ENTRY MODAL */}
+          <Modal visible={showManualForm} animationType="slide" transparent={true}>
+            <View style={styles.modalOverlay}>
+              <View style={styles.manualCard}>
+                <Text style={styles.manualTitle}>Manual Food Log</Text>
+                
+                <TextInput
+                  placeholder="Food Name (e.g. Apple)"
+                  style={styles.input}
+                  value={manualData.foodName}
+                  onChangeText={(txt: string) => setManualData({...manualData, foodName: txt})}
+                />
+                <TextInput
+                  placeholder="Calories (kcal)"
+                  keyboardType="numeric"
+                  style={styles.input}
+                  value={manualData.calories}
+                  onChangeText={(txt: string) => setManualData({...manualData, calories: txt})}
+                />
+                
+                <View style={styles.inputGrid}>
+                  <TextInput
+                    placeholder="Protein (g)"
+                    keyboardType="numeric"
+                    style={[styles.input, { flex: 1, marginRight: 8 }]}
+                    value={manualData.protein}
+                    onChangeText={(txt: string) => setManualData({...manualData, protein: txt})}
+                  />
+                  <TextInput
+                    placeholder="Carbs (g)"
+                    keyboardType="numeric"
+                    style={[styles.input, { flex: 1, marginRight: 8 }]}
+                    value={manualData.carbs}
+                    onChangeText={(txt: string) => setManualData({...manualData, carbs: txt})}
+                  />
+                  <TextInput
+                    placeholder="Fat (g)"
+                    keyboardType="numeric"
+                    style={[styles.input, { flex: 1 }]}
+                    value={manualData.fat}
+                    onChangeText={(txt: string) => setManualData({...manualData, fat: txt})}
+                  />
+                </View>
+
+                <TouchableOpacity style={styles.btnLog} onPress={handleManualSave}>
+                  <Text style={styles.btnLogText}>Save & Log</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.cancelBtn, {marginTop: 15}]} onPress={() => { setShowManualForm(false); retake(); }}>
+                  <Text style={styles.cancelText}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </Modal>
         </View>
       )}
     </View>
@@ -787,10 +909,44 @@ const styles = StyleSheet.create({
     marginBottom: 30,
   },
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 15,
     color: '#1a1a1a',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  manualCard: {
+    backgroundColor: '#fff',
+    width: '100%',
+    borderRadius: 24,
+    padding: 24,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: 10 },
+    shadowRadius: 20,
+    elevation: 5,
+  },
+  manualTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    marginBottom: 20,
+    textAlign: 'center',
+    color: '#333',
+  },
+  input: {
+    backgroundColor: '#F5F5F5',
+    borderRadius: 12,
+    padding: 15,
+    marginBottom: 12,
+    fontSize: 16,
+    color: '#333',
+  },
+  inputGrid: {
+    flexDirection: 'row',
+    marginBottom: 10,
   },
   ingredientsList: {
     gap: 15,

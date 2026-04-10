@@ -65,7 +65,7 @@ export default function TodayTab({ data, goals }: any) {
   const latestLog = data?.logs?.[0] || {};
   const safeCalorieGoal = goals?.calorieGoal || 2000;
   const safeBurnGoal = goals?.caloriesBurntGoal || 300;
-  const safeWaterGoal = goals?.waterGlasses || 8;
+  const safeWaterGoal = goals?.waterGoal || 8;
   const safeStepGoal = goals?.stepGoal || 10000;
   const safeProteinGoal = goals?.proteinGoal || 150;
 

@@ -35,35 +35,23 @@ export async function registerForPushNotificationsAsync() {
       finalStatus = status;
     }
     if (finalStatus !== 'granted') {
-      console.log('Failed to get push token for push notification!');
       return;
     }
 
     // Get the EAS Project ID
     const projectId = Constants.expoConfig?.extra?.eas?.projectId || Constants.easConfig?.projectId;
-    if (!projectId) {
-      console.warn('EAS Project ID not found. Ensure it is in app.json.');
-    }
 
     // Get the token
     try {
       token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
-      console.log('Expo Push Token:', token);
     } catch (e: any) {
+      const { CrashService } = require('./crashlytics');
       if (Platform.OS === 'android' && e.message?.includes('FirebaseApp is not initialized')) {
-        console.error('\n--- PUSH NOTIFICATION ERROR ---\n' +
-          'Firebase is not initialized for Android. To fix this:\n' +
-          '1. Create a project in Firebase Console.\n' +
-          '2. Add an Android app with package name: com.narayan098.mobile\n' +
-          '3. Download google-services.json and place it in the /mobile directory.\n' +
-          '4. Add "googleServicesFile": "./google-services.json" to the "android" section in app.json.\n' +
-          '-------------------------------\n');
+        CrashService.recordError(e, 'PushTokenFirebaseError');
       } else {
-        console.error('Error fetching push token:', e);
+        CrashService.recordError(e, 'PushTokenFetchError');
       }
     }
-  } else {
-    console.log('Must use physical device for Push Notifications');
   }
 
   return token;
@@ -80,8 +68,8 @@ export async function syncPushToken(token: string, userToken: string) {
       },
       body: JSON.stringify({ token }),
     });
-    console.log('Push token synced with backend');
-  } catch (error) {
-    console.error('Error syncing push token', error);
+  } catch (error: any) {
+    const { CrashService } = require('./crashlytics');
+    CrashService.recordError(error, 'SyncPushTokenError');
   }
 }

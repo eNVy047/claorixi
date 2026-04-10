@@ -86,7 +86,7 @@ export default function PaywallPopup({ visible, onSuccess, onLogout }: PaywallPo
 
           <View style={styles.pricingRow}>
             <View>
-              <Text style={styles.price}>₹99</Text>
+              <Text style={styles.price}>₹29</Text>
               <Text style={styles.period}>/per month</Text>
             </View>
             <View style={styles.badge}>
@@ -94,8 +94,8 @@ export default function PaywallPopup({ visible, onSuccess, onLogout }: PaywallPo
             </View>
           </View>
 
-          <TouchableOpacity 
-            style={styles.subscribeButton} 
+          <TouchableOpacity
+            style={styles.subscribeButton}
             onPress={handleSubscribe}
             disabled={loading}
           >

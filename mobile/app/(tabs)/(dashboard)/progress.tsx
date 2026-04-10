@@ -14,7 +14,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { format } from 'date-fns';
-import { useGoals } from '../../../context/GoalContext';
+import { useGoalStore } from '../../../store/useGoalStore';
 import TodayTab from '../../../components/progress_tabs/TodayTab';
 import WeekTab from '../../../components/progress_tabs/WeekTab';
 import MonthTab from '../../../components/progress_tabs/MonthTab';
@@ -34,7 +34,27 @@ const BLUE = '#4FC3F7';
 
 export default function ProgressScreen() {
   const router = useRouter();
-  const { goals } = useGoals();
+  const calorieGoalStore = useGoalStore(s => s.calorieGoal);
+  const caloriesBurntGoalStore = useGoalStore(s => s.caloriesBurntGoal);
+  const proteinGoalStore = useGoalStore(s => s.proteinGoal);
+  const carbsGoalStore = useGoalStore(s => s.carbsGoal);
+  const fatGoalStore = useGoalStore(s => s.fatGoal);
+  const stepGoalStore = useGoalStore(s => s.stepGoal);
+  const waterGoalStore = useGoalStore(s => s.waterGoal);
+  const sleepGoalStore = useGoalStore(s => s.sleepGoal);
+
+  // Derive goals for consistency
+  const goals = { 
+    calorieGoal: calorieGoalStore, 
+    caloriesBurntGoal: caloriesBurntGoalStore, 
+    proteinGoal: proteinGoalStore, 
+    carbsGoal: carbsGoalStore, 
+    fatGoal: fatGoalStore, 
+    stepGoal: stepGoalStore, 
+    waterGoal: waterGoalStore, 
+    sleepGoal: sleepGoalStore 
+  };
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState('Today');
@@ -54,7 +74,6 @@ export default function ProgressScreen() {
         setData(response.data.data);
       }
     } catch (error) {
-      console.error('Error fetching progress:', error);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -100,7 +119,6 @@ export default function ProgressScreen() {
       });
       fetchProgress();
     } catch (error) {
-      console.error('Error logging sleep:', error);
     }
   };
 
@@ -113,14 +131,14 @@ export default function ProgressScreen() {
   }
 
   const latestLog = data?.logs?.[data.logs.length - 1] || {};
-  const safeCalorieGoal = goals?.calorieGoal || 2000;
-  const safeBurnGoal = goals?.caloriesBurntGoal || 300;
-  const safeProteinGoal = goals?.proteinGoal || 150;
-  const safeCarbsGoal = goals?.carbsGoal || 200;
-  const safeFatGoal = goals?.fatGoal || 67;
-  const safeStepGoal = goals?.stepGoal || 10000;
-  const safeWaterGoal = goals?.waterGlasses || 8;
-  const safeSleepGoal = goals?.sleepGoal || 8;
+  const safeCalorieGoal = calorieGoalStore || 2000;
+  const safeBurnGoal = caloriesBurntGoalStore || 300;
+  const safeProteinGoal = proteinGoalStore || 150;
+  const safeCarbsGoal = carbsGoalStore || 200;
+  const safeFatGoal = fatGoalStore || 67;
+  const safeStepGoal = stepGoalStore || 10000;
+  const safeWaterGoal = waterGoalStore || 8;
+  const safeSleepGoal = sleepGoalStore || 8;
 
   const consumedProgress = Math.min((latestLog.caloriesConsumed || 0) / safeCalorieGoal, 1);
   const burntProgress = Math.min((latestLog.caloriesBurnt || 0) / safeBurnGoal, 1);
