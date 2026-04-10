@@ -7,13 +7,13 @@
     "icon": "./assets/images/icon.png",
     "scheme": "caloxi",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "jsEngine": "hermes",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.narayan098.caloxi",
       "googleServicesFile": "./GoogleService-Info.plist",
-      "buildNumber": "1",
+      "buildNumber": "4",
       "jsEngine": "hermes"
     },
     "android": {
@@ -26,7 +26,7 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.narayan098.caloxi",
-      "versionCode": 1,
+      "versionCode": 4,
       "googleServicesFile": "./google-services.json",
       "jsEngine": "hermes"
     },
@@ -52,7 +52,18 @@
       "expo-background-task",
       "expo-notifications",
       "@react-native-firebase/app",
-      "@react-native-firebase/crashlytics"
+      "@react-native-firebase/crashlytics",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minifyEnabled": true,
+            "shrinkResources": true,
+            "proguardRules": "-keep class com.google.android.gms.internal.firebase-auth-api.** { *; }\n-keep class com.google.firebase.** { *; }\n-keep public class com.google.android.gms.internal.measurement.** { *; }"
+          }
+        }
+      ],
+      "./plugins/withOptimizedResourceShrinking"
     ],
     "experiments": {
       "typedRoutes": true,
