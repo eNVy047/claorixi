@@ -41,3 +41,7 @@ app-example
 # generated native folders
 /ios
 /android
+
+# Firebase config (sensitive)
+google-services.json
+GoogleService-Info.plist
